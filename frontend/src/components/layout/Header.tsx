@@ -81,7 +81,7 @@ export default function Header() {
   }
 
   const coins: { id: keyof MarketData; label: string; icon: string; highlight?: boolean }[] = [
-    { id: 'btc', label: 'BTC', icon: '/image/icons/eth-logo.svg' },
+    { id: 'btc', label: 'BTC', icon: '/image/icons/btc_logo.svg' },
     { id: 'eth', label: 'ETH', icon: '/image/icons/eth-logo.svg' },
     { id: 'sol', label: 'SOL', icon: '/image/icons/sol_logo.svg', highlight: true },
   ]
@@ -107,11 +107,7 @@ export default function Header() {
               background: c.highlight ? 'rgba(99,102,241,0.08)' : 'transparent',
               border: c.highlight ? '1px solid rgba(99,102,241,0.15)' : 'none',
             }}>
-              {c.id === 'btc' ? (
-                <span style={{ color: '#f7931a', fontWeight: 800, fontSize: 11 }}>B</span>
-              ) : (
-                <img src={c.icon} alt={c.label} style={{ width: 12, height: 12 }} />
-              )}
+              <img src={c.icon} alt={c.label} style={{ width: 12, height: 12 }} />
               <span style={{ color: '#64748b', fontWeight: 600 }}>{c.label}</span>
               <span className="font-mono" style={{ color: '#e2e8f0', fontWeight: 600 }}>
                 {d.price ? fmtPrice(d.price) : '--'}
