@@ -1,0 +1,39 @@
+{
+  "name": "pump-launcher-backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "predev": "node kill-port.js",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.31.1",
+    "@pump-fun/pump-sdk": "^1.29.0",
+    "@solana/spl-token": "^0.4.13",
+    "@solana/web3.js": "^1.98.2",
+    "axios": "^1.13.6",
+    "bn.js": "^5.2.2",
+    "bs58": "^6.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "form-data": "^4.0.5",
+    "multer": "^2.1.0",
+    "uuid": "^11.1.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.1.6",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/form-data": "^2.2.1",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^22.0.0",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

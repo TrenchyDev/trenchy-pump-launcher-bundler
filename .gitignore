@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.env
+.env.*
+
+# Wallet keys, launch data, trade history — all sensitive
+backend/data/
+!backend/data/.gitkeep
+
+# IDE / OS
+.cursor/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
+
+# Build artifacts
+*.tsbuildinfo
