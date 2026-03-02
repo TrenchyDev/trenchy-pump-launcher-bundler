@@ -90,7 +90,8 @@ export default function Setup({ onReady }: { onReady: () => void }) {
       localStorage.setItem(FUNDING_KEY, key)
       onReady()
     } catch (err: any) {
-      setError(err.response?.data?.error ?? 'Failed to save. Check your key format.')
+      const msg = err.response?.data?.error ?? err.message ?? 'Failed to save. Check your key format.'
+      setError(msg)
     } finally {
       setLoading(false)
     }

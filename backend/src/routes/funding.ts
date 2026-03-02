@@ -15,7 +15,8 @@ router.post('/save', async (req: Request, res: Response) => {
     await fundingStore.saveFundingKey(sessionId.trim(), privateKey);
     res.json({ success: true });
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    console.error('[Funding] Save failed:', err?.message ?? err);
+    res.status(400).json({ error: err?.message ?? 'Failed to save funding key' });
   }
 });
 

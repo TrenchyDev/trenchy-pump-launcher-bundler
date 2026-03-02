@@ -33,7 +33,6 @@ const uploadsDir = fspath.join(__dirname, '../data/uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/api/uploads', express.static(uploadsDir));
 
-initFundingStore().catch(console.error);
 app.use('/api/funding', fundingRoutes);
 app.use('/api/wallets', walletRoutes);
 app.use('/api/launch', launchRoutes);
@@ -86,4 +85,9 @@ function tryListen(attempt: number): void {
   server.listen({ port: PORT, exclusive: false });
 }
 
-tryListen(0);
+(async () => {
+  await initFundingStore().catch(err => {
+    console.error('[Backend] FundingStore init failed:', err);
+  });
+  tryListen(0);
+})();

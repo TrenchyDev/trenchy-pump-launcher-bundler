@@ -43,8 +43,9 @@ export async function saveFundingKey(sessionId: string, privateKey: string): Pro
   if (!key) throw new Error('Private key required');
 
   try {
-    Keypair.fromSecretKey(bs58.decode(key));
-  } catch {
+    const decoded = bs58.decode(key);
+    Keypair.fromSecretKey(new Uint8Array(decoded), { skipValidation: true });
+  } catch (e: any) {
     throw new Error('Invalid Base58 private key');
   }
 
