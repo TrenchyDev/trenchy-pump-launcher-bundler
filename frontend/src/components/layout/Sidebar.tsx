@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { RocketLaunchIcon, ChartBarIcon, WalletIcon, Cog6ToothIcon, SignalIcon } from '@heroicons/react/24/outline'
+import { RocketLaunchIcon, ChartBarIcon, WalletIcon, Cog6ToothIcon, SignalIcon, ArrowRightStartOnRectangleIcon } from '@heroicons/react/24/outline'
 
 const links = [
   { to: '/launch', label: 'Launch', Icon: RocketLaunchIcon },
@@ -8,7 +8,12 @@ const links = [
   { to: '/settings', label: 'Settings', Icon: Cog6ToothIcon },
 ]
 
-export default function Sidebar({ envWarning = false }: { envWarning?: boolean }) {
+interface SidebarProps {
+  envWarning?: boolean
+  onClearSession?: () => void
+}
+
+export default function Sidebar({ envWarning = false, onClearSession }: SidebarProps) {
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
@@ -35,7 +40,24 @@ export default function Sidebar({ envWarning = false }: { envWarning?: boolean }
         ))}
       </nav>
 
-      <div style={{ padding: '16px 18px', borderTop: '1px solid rgba(37,51,70,0.5)' }}>
+      <div style={{ padding: '12px 18px', borderTop: '1px solid rgba(37,51,70,0.5)' }}>
+        {onClearSession && (
+          <button
+            onClick={onClearSession}
+            title="Clear session"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: 'none', border: 'none', cursor: 'pointer',
+              padding: '6px 0', width: '100%',
+              fontSize: 12, color: '#64748b', transition: 'color 0.15s',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.color = '#f87171')}
+            onMouseLeave={e => (e.currentTarget.style.color = '#64748b')}
+          >
+            <ArrowRightStartOnRectangleIcon style={{ width: 16, height: 16 }} />
+            Clear session
+          </button>
+        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: '#64748b' }}>
           <SignalIcon style={{ width: 14, height: 14, color: '#14b8a6' }} />
           <span>Mainnet</span>

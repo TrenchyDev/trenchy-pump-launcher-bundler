@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { fundingMiddleware, FundingRequest } from '../middleware/funding';
 import {
   PublicKey, LAMPORTS_PER_SOL, SystemProgram,
   TransactionMessage, VersionedTransaction,
@@ -335,7 +336,7 @@ router.get('/creator-fees-available', async (req: Request, res: Response) => {
 
 const FUND_AMOUNT_LAMPORTS = 1_500_000; // ~0.0015 SOL — covers rent-exemption + tx fee
 
-router.post('/collect-creator-fees', async (req: Request, res: Response) => {
+router.post('/collect-creator-fees', fundingMiddleware, async (req: FundingRequest, res: Response) => {
   const { launchId } = req.body;
   if (!launchId) return res.status(400).json({ error: 'launchId required' });
 
@@ -351,7 +352,7 @@ router.post('/collect-creator-fees', async (req: Request, res: Response) => {
     const keypair = vault.getKeypair(devWallet.id);
     const conn = solana.getConnection();
     const sdk = new OnlinePumpSdk(conn);
-    const fundingKp = solana.getFundingKeypair();
+    const fundingKp = solana.getFundingKeypair(req.fundingKeypair);
     let fundedFromFunding = false;
 
     const beforeVault = await suppressSdkWarns(() => sdk.getCreatorVaultBalanceBothPrograms(keypair.publicKey));
@@ -537,7 +538,7 @@ router.get('/all-unclaimed-fees', async (_req: Request, res: Response) => {
 
 const TX_FEE_LAMPORTS = 5000;
 
-router.post('/collect-all-fees', async (req: Request, res: Response) => {
+router.post('/collect-all-fees', fundingMiddleware, async (req: FundingRequest, res: Response) => {
   const { launchIds } = req.body;
   if (!Array.isArray(launchIds) || launchIds.length === 0) {
     return res.status(400).json({ error: 'launchIds array required' });
@@ -545,7 +546,7 @@ router.post('/collect-all-fees', async (req: Request, res: Response) => {
 
   const conn = solana.getConnection();
   const sdk = new OnlinePumpSdk(conn);
-  const fundingKp = solana.getFundingKeypair();
+  const fundingKp = solana.getFundingKeypair(req.fundingKeypair);
 
   const results: {
     launchId: string;

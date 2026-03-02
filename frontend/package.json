@@ -11,7 +11,9 @@
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
+    "@solana/web3.js": "^1.98.2",
     "axios": "^1.13.6",
+    "bs58": "^6.0.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.13.1"

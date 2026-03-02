@@ -55,21 +55,29 @@ class PumpPortalTracker {
   private alive = false;
   private persistTimer: ReturnType<typeof setInterval> | null = null;
 
-  private refreshWallets() {
+  private fundingPubkeyOverride: string | null = null;
+
+  private refreshWallets(fundingPubkey?: string) {
     this.ourWallets.clear();
     try {
       const wallets = vault.listWallets({});
       for (const w of wallets) {
         this.ourWallets.set(w.publicKey, { type: w.type, label: w.label });
       }
-      const fundingPk = process.env.FUNDING_PRIVATE_KEY;
-      if (fundingPk && fundingPk !== 'YOUR_BASE58_PRIVATE_KEY_HERE') {
-        try {
-          const { Keypair } = require('@solana/web3.js');
-          const bs58 = require('bs58');
-          const kp = Keypair.fromSecretKey(bs58.decode(fundingPk));
-          this.ourWallets.set(kp.publicKey.toBase58(), { type: 'funding', label: 'Funding' });
-        } catch {}
+      if (fundingPubkey) {
+        this.ourWallets.set(fundingPubkey, { type: 'funding', label: 'Funding' });
+      } else if (this.fundingPubkeyOverride) {
+        this.ourWallets.set(this.fundingPubkeyOverride, { type: 'funding', label: 'Funding' });
+      } else {
+        const pk = process.env.FUNDING_PRIVATE_KEY;
+        if (pk && pk !== 'YOUR_BASE58_PRIVATE_KEY_HERE') {
+          try {
+            const { Keypair } = require('@solana/web3.js');
+            const bs58 = require('bs58');
+            const kp = Keypair.fromSecretKey(bs58.decode(pk));
+            this.ourWallets.set(kp.publicKey.toBase58(), { type: 'funding', label: 'Funding' });
+          } catch {}
+        }
       }
     } catch {}
   }
@@ -204,8 +212,9 @@ class PumpPortalTracker {
     if (this.persistTimer) { clearInterval(this.persistTimer); this.persistTimer = null; }
   }
 
-  subscribe(mint: string) {
-    this.refreshWallets();
+  subscribe(mint: string, fundingPubkey?: string) {
+    if (fundingPubkey) this.fundingPubkeyOverride = fundingPubkey;
+    this.refreshWallets(fundingPubkey);
     if (this.subscribedMint && this.subscribedMint !== mint) {
       if (this.trades.length > 0) persistTrades(this.subscribedMint, this.trades);
       this.injectedWallets.delete(this.subscribedMint);

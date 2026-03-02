@@ -20,9 +20,10 @@ export function getConnection(): Connection {
   return connection;
 }
 
-export function getFundingKeypair(): Keypair {
+export function getFundingKeypair(override?: Keypair): Keypair {
+  if (override) return override;
   const key = process.env.FUNDING_PRIVATE_KEY;
-  if (!key) throw new Error('FUNDING_PRIVATE_KEY not set in .env');
+  if (!key || key === 'YOUR_BASE58_PRIVATE_KEY_HERE') throw new Error('FUNDING_PRIVATE_KEY not set');
   return Keypair.fromSecretKey(bs58.decode(key));
 }
 

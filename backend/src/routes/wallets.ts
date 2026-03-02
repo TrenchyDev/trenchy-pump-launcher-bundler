@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import * as vault from '../services/vault';
 import * as solana from '../services/solana';
+import { fundingMiddleware, FundingRequest } from '../middleware/funding';
 import {
   PublicKey, LAMPORTS_PER_SOL, SystemProgram,
   TransactionMessage, VersionedTransaction,
@@ -45,9 +46,9 @@ router.delete('/imported/:id', (req: Request, res: Response) => {
   res.json({ deleted: true });
 });
 
-router.get('/funding', async (_req: Request, res: Response) => {
+router.get('/funding', fundingMiddleware, async (req: FundingRequest, res: Response) => {
   try {
-    const kp = solana.getFundingKeypair();
+    const kp = solana.getFundingKeypair(req.fundingKeypair);
     const balance = await solana.getBalance(kp.publicKey);
     res.json({ publicKey: kp.publicKey.toBase58(), balance });
   } catch (err: any) {
@@ -207,8 +208,8 @@ router.post('/balances', async (req: Request, res: Response) => {
   res.json(results);
 });
 
-router.post('/gather', async (req: Request, res: Response) => {
-  const fundingKp = solana.getFundingKeypair();
+router.post('/gather', fundingMiddleware, async (req: FundingRequest, res: Response) => {
+  const fundingKp = solana.getFundingKeypair(req.fundingKeypair);
   const fundingPk = fundingKp.publicKey.toBase58();
   const launchId = typeof req.body?.launchId === 'string' ? req.body.launchId : undefined;
   let wallets = vault.listWallets({ status: 'active' });
@@ -271,8 +272,8 @@ router.post('/gather', async (req: Request, res: Response) => {
   res.json({ totalRecovered, wallets: results });
 });
 
-router.post('/close-token-accounts', async (_req: Request, res: Response) => {
-  const fundingKp = solana.getFundingKeypair();
+router.post('/close-token-accounts', fundingMiddleware, async (req: FundingRequest, res: Response) => {
+  const fundingKp = solana.getFundingKeypair(req.fundingKeypair);
   const conn = solana.getConnection();
   const archivedWallets = vault.listWallets({ status: 'archived' }).filter(w => w.type !== 'funding');
 

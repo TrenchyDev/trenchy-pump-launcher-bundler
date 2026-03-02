@@ -4,7 +4,11 @@ import axios from 'axios'
 import Sidebar from './Sidebar'
 import Header from './Header'
 
-export default function Layout() {
+interface LayoutProps {
+  onClearSession?: () => void
+}
+
+export default function Layout({ onClearSession }: LayoutProps) {
   const [missingKeys, setMissingKeys] = useState<string[]>([])
   const navigate = useNavigate()
 
@@ -16,7 +20,7 @@ export default function Layout() {
     <div className="layout-root">
       <div className="noise-bg" />
       <div className="ambient-glow" />
-      <Sidebar envWarning={missingKeys.length > 0} />
+      <Sidebar envWarning={missingKeys.length > 0} onClearSession={onClearSession} />
       <div className="main-area">
         <Header />
         {missingKeys.length > 0 && (

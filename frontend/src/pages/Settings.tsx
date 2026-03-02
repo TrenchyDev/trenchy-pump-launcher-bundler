@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
 import axios from 'axios'
+import { Keypair } from '@solana/web3.js'
+import bs58 from 'bs58'
+import { SESSION_KEY, FUNDING_KEY, getOrCreateSessionId } from './Setup'
 
 interface EnvEntry {
   key: string
@@ -18,6 +21,12 @@ export default function Settings() {
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const [fundingStatus, setFundingStatus] = useState<{ publicKey: string; balance?: number } | null>(null)
+  const [switchWalletMode, setSwitchWalletMode] = useState(false)
+  const [newPrivateKey, setNewPrivateKey] = useState('')
+  const [switchError, setSwitchError] = useState<string | null>(null)
+  const [switchLoading, setSwitchLoading] = useState(false)
+
   useEffect(() => {
     axios.get('/api/env').then(r => {
       setEntries(r.data.entries)
@@ -25,6 +34,12 @@ export default function Settings() {
       for (const e of r.data.entries) d[e.key] = e.value
       setDraft(d)
     })
+  }, [])
+
+  useEffect(() => {
+    axios.get('/api/wallets/funding').then(r => {
+      if (r.data.publicKey) setFundingStatus({ publicKey: r.data.publicKey, balance: r.data.balance })
+    }).catch(() => setFundingStatus(null))
   }, [])
 
   const dirty = entries.some(e => draft[e.key] !== e.value)
@@ -53,11 +68,128 @@ export default function Settings() {
     return val.slice(0, 4) + '•'.repeat(Math.min(val.length - 8, 20)) + val.slice(-4)
   }
 
+  async function handleSwitchWallet(e: React.FormEvent) {
+    e.preventDefault()
+    setSwitchError(null)
+    setSwitchLoading(true)
+    try {
+      const key = newPrivateKey.trim()
+      if (!key) {
+        setSwitchError('Enter private key')
+        return
+      }
+      Keypair.fromSecretKey(bs58.decode(key))
+      const sessionId = localStorage.getItem(SESSION_KEY) || getOrCreateSessionId()
+      await axios.post('/api/funding/save', { sessionId, privateKey: key })
+      localStorage.setItem(FUNDING_KEY, key)
+      const r = await axios.get('/api/wallets/funding')
+      setFundingStatus({ publicKey: r.data.publicKey, balance: r.data.balance })
+      setSwitchWalletMode(false)
+      setNewPrivateKey('')
+    } catch (err: any) {
+      setSwitchError(err.message?.includes('Invalid') ? 'Invalid Base58 key' : err.response?.data?.error ?? 'Failed')
+    } finally {
+      setSwitchLoading(false)
+    }
+  }
+
   return (
     <div className="fade-up" style={{ maxWidth: 720 }}>
       <div style={{ marginBottom: 24 }}>
         <h1 className="page-title">Settings</h1>
         <p className="page-subtitle">Environment configuration</p>
+      </div>
+
+      {/* Funding wallet / Switch */}
+      <div className="card" style={{ marginBottom: 24 }}>
+        <div style={{
+          padding: '16px 20px',
+          borderBottom: '1px solid rgba(37, 51, 70, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>Funding wallet</span>
+          {!switchWalletMode && (
+            <button
+              onClick={() => setSwitchWalletMode(true)}
+              style={{
+                padding: '6px 12px',
+                fontSize: 12,
+                background: 'rgba(37, 51, 70, 0.5)',
+                border: '1px solid rgba(37, 51, 70, 0.8)',
+                borderRadius: 6,
+                color: '#14b8a6',
+                cursor: 'pointer',
+              }}
+            >
+              Switch wallet
+            </button>
+          )}
+        </div>
+        <div style={{ padding: '16px 20px' }}>
+          {!switchWalletMode ? (
+            <div>
+              {fundingStatus ? (
+                <div style={{ fontSize: 13, color: '#94a3b8' }}>
+                  <div style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-all', marginBottom: 4 }}>
+                    {fundingStatus.publicKey}
+                  </div>
+                  {fundingStatus.balance != null && (
+                    <div style={{ fontSize: 12, color: '#64748b' }}>
+                      Balance: {fundingStatus.balance.toFixed(4)} SOL
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: '#64748b' }}>Loading...</div>
+              )}
+            </div>
+          ) : (
+            <form onSubmit={handleSwitchWallet}>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+                  New private key (Base58)
+                </label>
+                <textarea
+                  className="input"
+                  value={newPrivateKey}
+                  onChange={e => setNewPrivateKey(e.target.value)}
+                  placeholder="Paste new funding wallet private key..."
+                  rows={2}
+                  style={{ width: '100%', fontSize: 12, fontFamily: 'var(--font-mono)' }}
+                />
+              </div>
+              {switchError && <div style={{ fontSize: 12, color: '#f87171', marginBottom: 8 }}>{switchError}</div>}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => { setSwitchWalletMode(false); setNewPrivateKey(''); setSwitchError(null); }}
+                  style={{
+                    padding: '8px 0',
+                    flex: 1,
+                    background: 'transparent',
+                    border: '1px solid rgba(37, 51, 70, 0.8)',
+                    borderRadius: 6,
+                    color: '#94a3b8',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={switchLoading || !newPrivateKey.trim()}
+                  className="btn-primary"
+                  style={{ padding: '8px 0', flex: 1, fontSize: 12 }}
+                >
+                  {switchLoading ? 'Saving...' : 'Switch'}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
       </div>
 
       {missingRequired.length > 0 && (

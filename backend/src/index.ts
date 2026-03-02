@@ -9,6 +9,9 @@ import fs from 'fs';
 import { createServer } from 'http';
 import type { Server } from 'http';
 import type { AddressInfo } from 'net';
+import './db';
+import { initFundingStore } from './services/funding-store';
+import fundingRoutes from './routes/funding';
 import walletRoutes from './routes/wallets';
 import launchRoutes from './routes/launch';
 import tradingRoutes from './routes/trading';
@@ -30,6 +33,8 @@ const uploadsDir = fspath.join(__dirname, '../data/uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/api/uploads', express.static(uploadsDir));
 
+initFundingStore().catch(console.error);
+app.use('/api/funding', fundingRoutes);
 app.use('/api/wallets', walletRoutes);
 app.use('/api/launch', launchRoutes);
 app.use('/api/trading', tradingRoutes);

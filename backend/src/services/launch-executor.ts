@@ -175,8 +175,10 @@ export async function executeLaunch(
   launchId: string,
   params: LaunchParams & { mintAddressMode: string; vanityMintPublicKey: string },
   deps: ExecuteLaunchDeps,
+  fundingKeypair: Keypair,
 ) {
   const { readLaunches, saveLaunch, emit } = deps;
+  const fundingKp = fundingKeypair;
   const launch = readLaunches().find(l => l.id === launchId)!;
   launch.status = 'running';
   saveLaunch(launch);
@@ -198,7 +200,7 @@ export async function executeLaunch(
     }
 
     const mintAddress = mintKp.publicKey.toBase58();
-    tracker.subscribe(mintAddress);
+    tracker.subscribe(mintAddress, fundingKp.publicKey.toBase58());
     emit(launchId, { stage: 'tracking', message: `PumpPortal tracking started for ${mintAddress.slice(0, 8)}...` });
 
     let devKp: Keypair;
@@ -237,7 +239,6 @@ export async function executeLaunch(
     }
 
     emit(launchId, { stage: 'fund', message: 'Funding wallets...' });
-    const fundingKp = solana.getFundingKeypair();
     const tipSol = (Number(process.env.JITO_TIP_LAMPORTS) || 5_000_000) / LAMPORTS_PER_SOL;
     const devExtra = params.useJito ? tipSol + 0.1 : 0.1;
     const devFundAmount = params.devBuyAmount + devExtra;

@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import type { LaunchRecord, SSECallback } from '../types';
 import { executeLaunch } from '../services/launch-executor';
+import { fundingMiddleware, FundingRequest } from '../middleware/funding';
 import fs from 'fs';
 import path from 'path';
 
@@ -82,7 +83,7 @@ router.get('/:id/stream', (req: Request, res: Response) => {
   });
 });
 
-router.post('/', async (req: Request, res: Response) => {
+router.post('/', fundingMiddleware, async (req: FundingRequest, res: Response) => {
   const {
     tokenName,
     tokenSymbol,
@@ -148,7 +149,7 @@ router.post('/', async (req: Request, res: Response) => {
     devWalletId: devWalletId || undefined,
     bundleWalletIds: bundleWalletIds || undefined,
     holderWalletIds: holderWalletIds || undefined,
-  }, { readLaunches, saveLaunch, emit }).catch(err => {
+  }, { readLaunches, saveLaunch, emit }, req.fundingKeypair!).catch(err => {
     console.error('[Launch] Fatal error:', err);
   });
 });
