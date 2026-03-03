@@ -6,8 +6,8 @@
     "dev": "concurrently -n be,fe -c green,cyan \"npm run dev:backend\" \"wait-on http://localhost:3001/api/health -t 30000 && npm run dev:frontend\"",
     "dev:frontend": "cd frontend && npm run dev",
     "dev:backend": "cd backend && npm run dev",
-    "install:all": "npm install && cd frontend && npm install && cd ../backend && npm install",
-    "build": "npm run install:all && cd backend && npm run build && cd ../frontend && tsc -b && npx vite build --outDir ../backend/public",
+    "install:all": "npm install --include=dev && cd frontend && npm install --include=dev && cd ../backend && npm install --include=dev",
+    "build": "npm run install:all && cd backend && npx tsc && cd ../frontend && npx tsc -b && npx vite build --outDir ../backend/public",
     "start": "cd backend && node dist/index.js"
   },
   "devDependencies": {
