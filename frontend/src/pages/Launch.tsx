@@ -551,13 +551,13 @@ export default function Launch() {
               <textarea className="input" style={{ padding: '8px 10px', fontSize: 12, minHeight: 56 }} placeholder="Token description..."
                 value={form.description} onChange={e => updateForm({ description: e.target.value })} />
             </div>
-            {/* Links under description */}
+            {/* Links — enter any URL; we route to the correct pump.fun field by domain */}
             <div style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <input className="input" style={{ flex: 1, minWidth: 120, fontSize: 11, padding: '6px 10px' }} placeholder="Website"
+              <input className="input" style={{ flex: 1, minWidth: 120, fontSize: 11, padding: '6px 10px' }} placeholder="Link 1 (any URL)"
                 value={form.website} onChange={e => updateForm({ website: e.target.value })} />
-              <input className="input" style={{ flex: 1, minWidth: 120, fontSize: 11, padding: '6px 10px' }} placeholder="Twitter"
+              <input className="input" style={{ flex: 1, minWidth: 120, fontSize: 11, padding: '6px 10px' }} placeholder="Link 2 (any URL)"
                 value={form.twitter} onChange={e => updateForm({ twitter: e.target.value })} />
-              <input className="input" style={{ flex: 1, minWidth: 120, fontSize: 11, padding: '6px 10px' }} placeholder="Telegram"
+              <input className="input" style={{ flex: 1, minWidth: 120, fontSize: 11, padding: '6px 10px' }} placeholder="Link 3 (any URL)"
                 value={form.telegram} onChange={e => updateForm({ telegram: e.target.value })} />
             </div>
           </div>

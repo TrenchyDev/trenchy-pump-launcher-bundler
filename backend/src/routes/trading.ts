@@ -143,7 +143,7 @@ router.post('/execute', async (req: Request, res: Response) => {
     tx.sign([keypair]);
 
     const sig = await conn.sendTransaction(tx, { skipPreflight: true });
-    await conn.confirmTransaction(sig, 'confirmed');
+    await solana.confirmTransactionPolling(conn, sig);
 
     trade.signature = sig;
     trade.status = 'confirmed';

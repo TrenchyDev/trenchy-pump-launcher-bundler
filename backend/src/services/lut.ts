@@ -28,7 +28,7 @@ import {
 } from '@pump-fun/pump-sdk';
 import fs from 'fs';
 import path from 'path';
-import { getConnection } from './solana';
+import { getConnection, confirmTransactionPolling } from './solana';
 
 const LUT_FILE = path.join(__dirname, '../../data/lut.json');
 
@@ -50,7 +50,7 @@ async function sendAndConfirmTx(
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('confirmed');
+      const { blockhash } = await conn.getLatestBlockhash('confirmed');
       const msg = new TransactionMessage({
         payerKey: signer.publicKey,
         recentBlockhash: blockhash,
@@ -65,7 +65,7 @@ async function sendAndConfirmTx(
       tx.sign([signer]);
 
       const sig = await conn.sendRawTransaction(tx.serialize(), { skipPreflight: true });
-      await conn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
+      await confirmTransactionPolling(conn, sig);
       return true;
     } catch (err: any) {
       console.log(`[LUT] Attempt ${attempt}/${maxRetries} failed: ${err.message}`);

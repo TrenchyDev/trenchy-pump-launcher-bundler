@@ -151,9 +151,26 @@ export async function uploadMetadataToIpfs(params: {
   form.append('symbol', params.tokenSymbol);
   form.append('description', params.description || '');
   form.append('showName', 'true');
-  if (params.twitter) form.append('twitter', params.twitter);
-  if (params.telegram) form.append('telegram', params.telegram);
-  if (params.website) form.append('website', params.website);
+
+  // Route each link to the pump.fun field that matches its domain. Pump.fun prepends t.me to
+  // telegram, x.com to twitter, etc. — so we must send each URL to the field that won't transform it.
+  const links = [params.website, params.twitter, params.telegram].filter(Boolean);
+  let website = '';
+  let twitter = '';
+  let telegram = '';
+  for (const url of links) {
+    const lower = url.toLowerCase();
+    if (lower.includes('t.me') || lower.includes('telegram')) {
+      if (!telegram) telegram = url;
+    } else if (lower.includes('twitter.com') || lower.includes('x.com')) {
+      if (!twitter) twitter = url;
+    } else {
+      if (!website) website = url;
+    }
+  }
+  if (website) form.append('website', website);
+  if (twitter) form.append('twitter', twitter);
+  if (telegram) form.append('telegram', telegram);
 
   const resp = await axios.post('https://pump.fun/api/ipfs', form, {
     headers: form.getHeaders(),
@@ -190,11 +207,13 @@ export async function executeLaunch(
   try {
     let mintKp: Keypair;
 
-    if (params.mintAddressMode === 'vanity' && params.vanityMintPublicKey) {
-      const poolKp = vanity.getKeypairFromPool(params.vanityMintPublicKey);
-      if (!poolKp) throw new Error(`Vanity address ${params.vanityMintPublicKey} not found in pool`);
-      emit(launchId, { stage: 'mint', message: `Using vanity mint: ${params.vanityMintPublicKey.slice(0, 8)}...${params.vanityMintPublicKey.slice(-4)}` });
-      vanity.markUsed(params.vanityMintPublicKey);
+    if (params.mintAddressMode === 'vanity') {
+      const next = vanity.getNextAvailable();
+      if (!next) throw new Error('No vanity addresses available. Generate more in the pool first.');
+      const poolKp = vanity.getKeypairFromPool(next.publicKey);
+      if (!poolKp) throw new Error(`Vanity address ${next.publicKey} not found in pool`);
+      emit(launchId, { stage: 'mint', message: `Using vanity mint: ${next.publicKey.slice(0, 8)}...${next.publicKey.slice(-4)}` });
+      vanity.markUsed(next.publicKey);
       vault.importAndStore(poolKp, 'mint', `Mint (vanity) - ${params.tokenName}`, launchId);
       mintKp = poolKp;
     } else {
@@ -537,20 +556,6 @@ export async function executeLaunch(
       // Non-Jito path
       emit(launchId, { stage: 'submit', message: 'Submitting transaction...' });
       const sig = await solana.executeTransaction(createTx, []);
-      try {
-        await conn.confirmTransaction(sig, 'confirmed');
-      } catch (confirmErr: unknown) {
-        const errMsg = confirmErr instanceof Error ? confirmErr.message : String(confirmErr);
-        if (errMsg.includes('unknown if it succeeded or failed')) {
-          const rpcConfirmed = await waitForSignatureConfirmation(
-            conn, sig, 45_000,
-            msg => emit(launchId, { stage: 'confirming', message: msg }),
-          );
-          if (!rpcConfirmed) throw confirmErr;
-        } else {
-          throw confirmErr;
-        }
-      }
 
       launch.status = 'confirmed';
       launch.signature = sig;

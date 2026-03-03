@@ -28,6 +28,25 @@ function isRetryableRpcError(err: unknown): boolean {
   );
 }
 
+/** Polling-based confirmation — works with HTTP-only RPCs that don't support signatureSubscribe */
+export async function confirmTransactionPolling(
+  conn: Connection,
+  signature: string,
+  timeoutMs = 60_000,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const res = await conn.getSignatureStatuses([signature], { searchTransactionHistory: true });
+    const status = res.value[0];
+    if (status?.err) throw new Error(`Transaction failed: ${JSON.stringify(status.err)}`);
+    if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
+      return;
+    }
+    await new Promise(r => setTimeout(r, 1500));
+  }
+  throw new Error(`Transaction confirmation timeout: ${signature.slice(0, 12)}...`);
+}
+
 function getMainConnection(rpcOverride?: string): Connection {
   const endpoint = rpcOverride?.trim() || process.env.RPC_ENDPOINT || FALLBACK_RPC;
   if (!rpcOverride && mainConnection) return mainConnection;
@@ -135,7 +154,7 @@ export async function transferSol(
         skipPreflight: true,
         maxRetries: 5,
       });
-      await conn.confirmTransaction(sig, 'confirmed');
+      await confirmTransactionPolling(conn, sig);
       return sig;
     } catch (err: unknown) {
       lastErr = err instanceof Error ? err : new Error(String(err));
@@ -167,7 +186,7 @@ export async function executeTransaction(
   const c = conn ?? getConnection();
   tx.sign(signers);
   const sig = await c.sendTransaction(tx, { skipPreflight: true });
-  await c.confirmTransaction(sig, 'confirmed');
+  await confirmTransactionPolling(c, sig);
   return sig;
 }
 
