@@ -28,7 +28,6 @@ import type { Server } from 'http';
 import type { AddressInfo } from 'net';
 import './db';
 import { initFundingStore } from './services/funding-store';
-import authRoutes from './routes/auth';
 import fundingRoutes from './routes/funding';
 import walletRoutes from './routes/wallets';
 import launchRoutes from './routes/launch';
@@ -51,7 +50,6 @@ const uploadsDir = fspath.join(__dirname, '../data/uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/api/uploads', express.static(uploadsDir));
 
-app.use('/api/auth', authRoutes);
 app.use('/api/funding', fundingRoutes);
 app.use('/api/wallets', walletRoutes);
 app.use('/api/launch', launchRoutes);
