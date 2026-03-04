@@ -10,7 +10,7 @@ import {
   CodeBracketIcon,
 } from '@heroicons/react/24/outline'
 
-const GITHUB_URL = 'https://github.com/TrenchyDev/trenchy-pump-launcher-bundler'
+const GITHUB_URL = 'https://github.com/TrenchyDev/trenchy-pumpfun-launcher-bundler-dashboard-react'
 
 const SESSION_KEY = 'trencher_session_id'
 const FUNDING_KEY = 'trencher_funding_key'

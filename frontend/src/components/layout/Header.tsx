@@ -120,7 +120,7 @@ export default function Header() {
       {/* Right: funding wallet + GitHub */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <a
-          href="https://github.com/TrenchyDev/trenchy-pump-launcher-bundler"
+          href="https://github.com/TrenchyDev/trenchy-pumpfun-launcher-bundler-dashboard-react"
           target="_blank"
           rel="noopener noreferrer"
           title="GitHub"
