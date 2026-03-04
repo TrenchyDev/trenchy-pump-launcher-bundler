@@ -214,25 +214,25 @@ export async function executeLaunch(
       if (!poolKp) throw new Error(`Vanity address ${next.publicKey} not found in pool`);
       emit(launchId, { stage: 'mint', message: `Using vanity mint: ${next.publicKey.slice(0, 8)}...${next.publicKey.slice(-4)}` });
       vanity.markUsed(next.publicKey);
-      vault.importAndStore(poolKp, 'mint', `Mint (vanity) - ${params.tokenName}`, launchId);
+      await vault.importAndStore(poolKp, 'mint', `Mint (vanity) - ${params.tokenName}`, launchId, sessionId);
       mintKp = poolKp;
     } else {
       emit(launchId, { stage: 'mint', message: 'Generating mint keypair...' });
-      const result = vault.generateAndStore('mint', `Mint - ${params.tokenName}`, launchId);
+      const result = await vault.generateAndStore('mint', `Mint - ${params.tokenName}`, launchId, sessionId);
       mintKp = result.keypair;
     }
 
     const mintAddress = mintKp.publicKey.toBase58();
-    tracker.subscribe(mintAddress, fundingKp.publicKey.toBase58());
+    await tracker.subscribe(mintAddress, fundingKp.publicKey.toBase58(), sessionId);
     emit(launchId, { stage: 'tracking', message: `PumpPortal tracking started for ${mintAddress.slice(0, 8)}...` });
 
     let devKp: Keypair;
     if (params.devWalletId) {
       emit(launchId, { stage: 'dev-wallet', message: 'Using custom dev wallet...' });
-      ({ keypair: devKp } = vault.assignToLaunch(params.devWalletId, launchId));
+      ({ keypair: devKp } = await vault.assignToLaunch(params.devWalletId, launchId, sessionId));
     } else {
       emit(launchId, { stage: 'dev-wallet', message: 'Creating dev wallet...' });
-      ({ keypair: devKp } = vault.generateAndStore('dev', `Dev - ${params.tokenName}`, launchId));
+      ({ keypair: devKp } = await vault.generateAndStore('dev', `Dev - ${params.tokenName}`, launchId, sessionId));
     }
 
     const bundleWallets: { keypair: Keypair; wallet: vault.StoredWallet }[] = [];
@@ -241,9 +241,9 @@ export async function executeLaunch(
       for (let i = 0; i < params.bundleWalletCount; i++) {
         const customId = params.bundleWalletIds?.[i];
         if (customId) {
-          bundleWallets.push(vault.assignToLaunch(customId, launchId));
+          bundleWallets.push(await vault.assignToLaunch(customId, launchId, sessionId));
         } else {
-          bundleWallets.push(vault.generateAndStore('bundle', `Bundle ${i + 1} - ${params.tokenName}`, launchId));
+          bundleWallets.push(await vault.generateAndStore('bundle', `Bundle ${i + 1} - ${params.tokenName}`, launchId, sessionId));
         }
       }
     }
@@ -254,9 +254,9 @@ export async function executeLaunch(
       for (let i = 0; i < params.holderWalletCount; i++) {
         const customId = params.holderWalletIds?.[i];
         if (customId) {
-          holderWallets.push(vault.assignToLaunch(customId, launchId));
+          holderWallets.push(await vault.assignToLaunch(customId, launchId, sessionId));
         } else {
-          holderWallets.push(vault.generateAndStore('holder', `Holder ${i + 1} - ${params.tokenName}`, launchId));
+          holderWallets.push(await vault.generateAndStore('holder', `Holder ${i + 1} - ${params.tokenName}`, launchId, sessionId));
         }
       }
     }
@@ -395,7 +395,8 @@ export async function executeLaunch(
     const injectLaunchTrades = async (walletBuyData?: { kp: Keypair; solAmount: number; tokenAmount: BN }[]) => {
       try {
         const mintAddr = mintKp.publicKey.toBase58();
-        const devW = vault.listWallets({ type: 'dev' }).find(w => w.launchId === launchId);
+        const devWallets = await vault.listWallets({ type: 'dev' }, sessionId);
+        const devW = devWallets.find(w => w.launchId === launchId);
         const devLabel = devW?.label || 'Dev';
         const devTokenAmt = await pumpfun.getDevBuyTokenAmount(params.devBuyAmount);
         const now = Date.now() - 120_000;
@@ -403,15 +404,16 @@ export async function executeLaunch(
           createLaunchBuyTrade(mintAddr, launchId, devKp.publicKey.toBase58(), 'dev', devLabel, params.devBuyAmount, devTokenAmt, 'dev', 0, now),
         ];
         if (walletBuyData) {
+          const allWallets = await vault.listWallets({}, sessionId);
           walletBuyData.forEach((b, i) => {
-            const w = vault.listWallets({}).find(x => x.publicKey === b.kp.publicKey.toBase58());
+            const w = allWallets.find(x => x.publicKey === b.kp.publicKey.toBase58());
             trades.push(createLaunchBuyTrade(
               mintAddr, launchId, b.kp.publicKey.toBase58(), 'bundle',
               w?.label || `Bundle ${i + 1}`, b.solAmount, b.tokenAmount.toNumber(), `b${i + 1}`, i + 1, now,
             ));
           });
         }
-        tracker.injectLaunchBuys(mintAddr, trades);
+        await tracker.injectLaunchBuys(mintAddr, trades);
       } catch (injErr: unknown) {
         const msg = injErr instanceof Error ? injErr.message : String(injErr);
         console.warn('[Launch] Failed to inject launch buys:', msg);

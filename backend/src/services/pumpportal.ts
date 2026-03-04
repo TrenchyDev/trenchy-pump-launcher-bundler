@@ -56,11 +56,12 @@ class PumpPortalTracker {
   private persistTimer: ReturnType<typeof setInterval> | null = null;
 
   private fundingPubkeyOverride: string | null = null;
+  private sessionIdOverride: string | null = null;
 
-  private refreshWallets(fundingPubkey?: string) {
+  private async refreshWallets(fundingPubkey?: string) {
     this.ourWallets.clear();
     try {
-      const wallets = vault.listWallets({});
+      const wallets = await vault.listWallets({}, this.sessionIdOverride ?? undefined);
       for (const w of wallets) {
         this.ourWallets.set(w.publicKey, { type: w.type, label: w.label });
       }
@@ -212,9 +213,10 @@ class PumpPortalTracker {
     if (this.persistTimer) { clearInterval(this.persistTimer); this.persistTimer = null; }
   }
 
-  subscribe(mint: string, fundingPubkey?: string) {
+  async subscribe(mint: string, fundingPubkey?: string, sessionId?: string) {
     if (fundingPubkey) this.fundingPubkeyOverride = fundingPubkey;
-    this.refreshWallets(fundingPubkey);
+    if (sessionId) this.sessionIdOverride = sessionId;
+    await this.refreshWallets(fundingPubkey);
     if (this.subscribedMint && this.subscribedMint !== mint) {
       if (this.trades.length > 0) persistTrades(this.subscribedMint, this.trades);
       this.injectedWallets.delete(this.subscribedMint);
@@ -312,8 +314,8 @@ class PumpPortalTracker {
    * Registers each trader pubkey so future PumpPortal messages for the same
    * wallet+mint are silently dropped (wallet-pubkey-based dedup).
    */
-  injectLaunchBuys(mint: string, trades: FormattedTrade[]) {
-    this.refreshWallets();
+  async injectLaunchBuys(mint: string, trades: FormattedTrade[]) {
+    await this.refreshWallets();
 
     if (!this.injectedWallets.has(mint)) {
       this.injectedWallets.set(mint, new Set());

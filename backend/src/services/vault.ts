@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import bs58 from 'bs58';
+import { Pool } from 'pg';
 
 export interface StoredWallet {
   id: string;
@@ -27,8 +28,34 @@ interface LegacyWallet {
   launchId?: string;
 }
 
-const DATA_FILE = path.join(__dirname, '../../keys/wallets.json');
-const IMPORTED_FILE = path.join(__dirname, '../../keys/imported-wallets.json');
+const KEYS_BASE = process.env.RAILWAY_VOLUME_MOUNT_PATH
+  || process.env.KEYS_DATA_DIR
+  || path.join(__dirname, '../../keys');
+const DATA_FILE = path.join(KEYS_BASE, 'wallets.json');
+const IMPORTED_FILE = path.join(KEYS_BASE, 'imported-wallets.json');
+
+let pgPool: Pool | null = null;
+const DEFAULT_SESSION = 'default';
+
+function getPool(): Pool | null {
+  if (pgPool) return pgPool;
+  const url = process.env.DATABASE_URL;
+  if (!url) return null;
+  try {
+    pgPool = new Pool({ connectionString: url });
+    return pgPool;
+  } catch {
+    return null;
+  }
+}
+
+function usePostgres(): boolean {
+  return !!getPool();
+}
+
+function ensureKeysDir(): void {
+  if (!fs.existsSync(KEYS_BASE)) fs.mkdirSync(KEYS_BASE, { recursive: true });
+}
 
 function legacyDecrypt(encrypted: string, iv: string): string {
   const raw = process.env.ENCRYPTION_KEY || 'default-key-change-me-32-chars!!';
@@ -39,7 +66,9 @@ function legacyDecrypt(encrypted: string, iv: string): string {
   return decrypted;
 }
 
-function readAll(): StoredWallet[] {
+// --- File-based (local dev) ---
+
+function readAllFile(): StoredWallet[] {
   if (!fs.existsSync(DATA_FILE)) return [];
   const raw = fs.readFileSync(DATA_FILE, 'utf8');
   const wallets = JSON.parse(raw || '[]') as any[];
@@ -82,19 +111,177 @@ function readAll(): StoredWallet[] {
     return w as StoredWallet;
   });
 
-  if (migrated) writeAll(result);
+  if (migrated) writeAllFile(result);
   return result;
 }
 
-function writeAll(wallets: StoredWallet[]) {
+function writeAllFile(wallets: StoredWallet[]) {
+  ensureKeysDir();
   fs.writeFileSync(DATA_FILE, JSON.stringify(wallets, null, 2));
 }
 
-export function generateAndStore(
+function readImportedFile(): StoredWallet[] {
+  if (!fs.existsSync(IMPORTED_FILE)) return [];
+  try { return JSON.parse(fs.readFileSync(IMPORTED_FILE, 'utf8') || '[]'); } catch { return []; }
+}
+
+function writeImportedFile(wallets: StoredWallet[]) {
+  ensureKeysDir();
+  fs.writeFileSync(IMPORTED_FILE, JSON.stringify(wallets, null, 2));
+}
+
+// --- PostgreSQL ---
+
+export async function initVaultStore(): Promise<void> {
+  const pool = getPool();
+  if (!pool) {
+    console.log('[Vault] No DATABASE_URL — using file storage (local dev)');
+    return;
+  }
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS vault_wallets (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        public_key TEXT NOT NULL,
+        private_key TEXT NOT NULL,
+        type TEXT NOT NULL,
+        label TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        launch_id TEXT,
+        source TEXT NOT NULL DEFAULT 'generated',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(session_id, public_key)
+      )
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_vault_wallets_session ON vault_wallets(session_id)
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_vault_wallets_launch ON vault_wallets(launch_id)
+    `);
+    console.log('[Vault] PostgreSQL initialized');
+  } catch (err) {
+    console.error('[Vault] PostgreSQL init failed:', err);
+  }
+}
+
+function requireSession(sessionId?: string): string {
+  if (usePostgres() && !sessionId) {
+    throw new Error('Session required for vault operations (send x-session-id header)');
+  }
+  return sessionId || DEFAULT_SESSION;
+}
+
+async function readAllPg(sessionId: string): Promise<StoredWallet[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  const r = await pool.query(
+    `SELECT id, public_key, private_key, type, label, status, launch_id, created_at
+     FROM vault_wallets WHERE session_id = $1 AND source = 'generated'`,
+    [sessionId],
+  );
+  return r.rows.map(row => ({
+    id: row.id,
+    publicKey: row.public_key,
+    privateKey: row.private_key,
+    type: row.type,
+    label: row.label,
+    status: row.status,
+    launchId: row.launch_id ?? undefined,
+    createdAt: row.created_at,
+  }));
+}
+
+async function writeWalletPg(sessionId: string, w: StoredWallet, source: 'generated' | 'imported'): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO vault_wallets (id, session_id, public_key, private_key, type, label, status, launch_id, source, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     ON CONFLICT (id) DO UPDATE SET private_key = $4, type = $5, label = $6, status = $7, launch_id = $8`,
+    [w.id, sessionId, w.publicKey, w.privateKey, w.type, w.label, w.status, w.launchId ?? null, source, w.createdAt],
+  );
+}
+
+async function readImportedPg(sessionId: string): Promise<StoredWallet[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  const r = await pool.query(
+    `SELECT id, public_key, private_key, type, label, status, launch_id, created_at
+     FROM vault_wallets WHERE session_id = $1 AND source = 'imported'`,
+    [sessionId],
+  );
+  return r.rows.map(row => ({
+    id: row.id,
+    publicKey: row.public_key,
+    privateKey: row.private_key,
+    type: row.type,
+    label: row.label,
+    status: row.status,
+    launchId: row.launch_id ?? undefined,
+    createdAt: row.created_at,
+  }));
+}
+
+async function updateWalletPg(sessionId: string, walletId: string, updates: Partial<StoredWallet>): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) return false;
+  const sets: string[] = [];
+  const vals: any[] = [];
+  let i = 1;
+  if (updates.status !== undefined) { sets.push(`status = $${i++}`); vals.push(updates.status); }
+  if (updates.launchId !== undefined) { sets.push(`launch_id = $${i++}`); vals.push(updates.launchId); }
+  if (updates.label !== undefined) { sets.push(`label = $${i++}`); vals.push(updates.label); }
+  if (sets.length === 0) return true;
+  vals.push(walletId, sessionId);
+  const r = await pool.query(
+    `UPDATE vault_wallets SET ${sets.join(', ')} WHERE id = $${i} AND session_id = $${i + 1}`,
+    vals,
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+async function deleteWalletPg(sessionId: string, walletId: string, source: 'generated' | 'imported'): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) return false;
+  const r = await pool.query(
+    `DELETE FROM vault_wallets WHERE id = $1 AND session_id = $2 AND source = $3`,
+    [walletId, sessionId, source],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+async function getWalletByIdPg(sessionId: string, walletId: string): Promise<StoredWallet | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  const r = await pool.query(
+    `SELECT id, public_key, private_key, type, label, status, launch_id, created_at
+     FROM vault_wallets WHERE id = $1 AND session_id = $2`,
+    [walletId, sessionId],
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    publicKey: row.public_key,
+    privateKey: row.private_key,
+    type: row.type,
+    label: row.label,
+    status: row.status,
+    launchId: row.launch_id ?? undefined,
+    createdAt: row.created_at,
+  };
+}
+
+// --- Unified API (sync for file, async for PG) ---
+
+export async function generateAndStore(
   type: StoredWallet['type'],
   label: string,
   launchId?: string,
-): { wallet: StoredWallet; keypair: Keypair } {
+  sessionId?: string,
+): Promise<{ wallet: StoredWallet; keypair: Keypair }> {
   const keypair = Keypair.generate();
   const secretB58 = bs58.encode(keypair.secretKey);
 
@@ -109,19 +296,26 @@ export function generateAndStore(
     launchId,
   };
 
-  const wallets = readAll();
-  wallets.push(wallet);
-  writeAll(wallets);
+  const sid = requireSession(sessionId);
 
+  if (usePostgres()) {
+    await writeWalletPg(sid, wallet, 'generated');
+    return { wallet, keypair };
+  }
+
+  const wallets = readAllFile();
+  wallets.push(wallet);
+  writeAllFile(wallets);
   return { wallet, keypair };
 }
 
-export function importAndStore(
+export async function importAndStore(
   keypair: Keypair,
   type: StoredWallet['type'],
   label: string,
   launchId?: string,
-): StoredWallet {
+  sessionId?: string,
+): Promise<StoredWallet> {
   const secretB58 = bs58.encode(keypair.secretKey);
 
   const wallet: StoredWallet = {
@@ -135,18 +329,25 @@ export function importAndStore(
     launchId,
   };
 
-  const wallets = readAll();
-  wallets.push(wallet);
-  writeAll(wallets);
+  const sid = requireSession(sessionId);
 
+  if (usePostgres()) {
+    await writeWalletPg(sid, wallet, 'generated');
+    return wallet;
+  }
+
+  const wallets = readAllFile();
+  wallets.push(wallet);
+  writeAllFile(wallets);
   return wallet;
 }
 
-export function importKey(
+export async function importKey(
   privateKeyB58: string,
   type: StoredWallet['type'],
   label: string,
-): StoredWallet {
+  sessionId?: string,
+): Promise<StoredWallet> {
   const kp = Keypair.fromSecretKey(bs58.decode(privateKeyB58));
 
   const wallet: StoredWallet = {
@@ -159,148 +360,252 @@ export function importKey(
     createdAt: new Date().toISOString(),
   };
 
-  const imported = readImported();
+  const sid = requireSession(sessionId);
+
+  if (usePostgres()) {
+    const imported = await readImportedPg(sid);
+    if (imported.some(w => w.publicKey === wallet.publicKey)) {
+      throw new Error('Wallet already imported');
+    }
+    await writeWalletPg(sid, wallet, 'imported');
+    return wallet;
+  }
+
+  const imported = readImportedFile();
   if (imported.some(w => w.publicKey === wallet.publicKey)) {
     throw new Error('Wallet already imported');
   }
   imported.push(wallet);
-  writeImported(imported);
-
+  writeImportedFile(imported);
   return wallet;
 }
 
-function readImported(): StoredWallet[] {
-  if (!fs.existsSync(IMPORTED_FILE)) return [];
-  try { return JSON.parse(fs.readFileSync(IMPORTED_FILE, 'utf8') || '[]'); } catch { return []; }
+export async function listImported(sessionId?: string): Promise<StoredWallet[]> {
+  const sid = requireSession(sessionId);
+  if (usePostgres()) return readImportedPg(sid);
+  return readImportedFile();
 }
 
-function writeImported(wallets: StoredWallet[]) {
-  const dir = path.dirname(IMPORTED_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(IMPORTED_FILE, JSON.stringify(wallets, null, 2));
-}
+export async function deleteImported(walletId: string, sessionId?: string): Promise<boolean> {
+  const sid = requireSession(sessionId);
+  if (usePostgres()) return deleteWalletPg(sid, walletId, 'imported');
 
-export function listImported(): StoredWallet[] {
-  return readImported();
-}
-
-export function deleteImported(walletId: string): boolean {
-  const imported = readImported();
+  const imported = readImportedFile();
   const idx = imported.findIndex(w => w.id === walletId);
   if (idx === -1) return false;
   imported.splice(idx, 1);
-  writeImported(imported);
+  writeImportedFile(imported);
   return true;
 }
 
-export function getImportedKeypair(walletId: string): Keypair | null {
-  const w = readImported().find(w => w.id === walletId);
+export async function getImportedKeypair(walletId: string, sessionId?: string): Promise<Keypair | null> {
+  const sid = requireSession(sessionId);
+  let w: StoredWallet | null;
+  if (usePostgres()) {
+    const imported = await readImportedPg(sid);
+    w = imported.find(x => x.id === walletId) ?? null;
+  } else {
+    w = readImportedFile().find(x => x.id === walletId) ?? null;
+  }
   if (!w) return null;
   return Keypair.fromSecretKey(bs58.decode(w.privateKey));
 }
 
-export function getImportedPrivateKey(walletId: string): string | null {
-  const w = readImported().find(w => w.id === walletId);
+export async function getImportedPrivateKey(walletId: string, sessionId?: string): Promise<string | null> {
+  const sid = requireSession(sessionId);
+  let w: StoredWallet | null;
+  if (usePostgres()) {
+    const imported = await readImportedPg(sid);
+    w = imported.find(x => x.id === walletId) ?? null;
+  } else {
+    w = readImportedFile().find(x => x.id === walletId) ?? null;
+  }
   return w?.privateKey ?? null;
 }
 
-export function updateImportedLabel(walletId: string, label: string): StoredWallet | null {
-  const imported = readImported();
-  const w = imported.find(w => w.id === walletId);
+export async function updateImportedLabel(walletId: string, label: string, sessionId?: string): Promise<StoredWallet | null> {
+  const sid = requireSession(sessionId);
+  if (usePostgres()) {
+    const ok = await updateWalletPg(sid, walletId, { label });
+    if (!ok) return null;
+    return getWalletByIdPg(sid, walletId);
+  }
+
+  const imported = readImportedFile();
+  const w = imported.find(x => x.id === walletId);
   if (!w) return null;
   w.label = label;
-  writeImported(imported);
+  writeImportedFile(imported);
   return w;
 }
 
-export function assignToLaunch(walletId: string, launchId: string): { wallet: StoredWallet; keypair: Keypair } {
-  const imported = readImported();
+export async function assignToLaunch(walletId: string, launchId: string, sessionId?: string): Promise<{ wallet: StoredWallet; keypair: Keypair }> {
+  const sid = requireSession(sessionId);
+
+  if (usePostgres()) {
+    const imported = await readImportedPg(sid);
+    const iw = imported.find(w => w.id === walletId);
+    if (iw) {
+      if (iw.status !== 'active') throw new Error(`Wallet ${walletId} is ${iw.status}, cannot assign`);
+      await updateWalletPg(sid, walletId, { launchId });
+      const keypair = Keypair.fromSecretKey(bs58.decode(iw.privateKey));
+      return { wallet: { ...iw, launchId }, keypair };
+    }
+
+    const wallets = await readAllPg(sid);
+    const w = wallets.find(x => x.id === walletId);
+    if (!w) throw new Error(`Wallet ${walletId} not found`);
+    if (w.status !== 'active') throw new Error(`Wallet ${walletId} is ${w.status}, cannot assign`);
+    await updateWalletPg(sid, walletId, { launchId });
+    const keypair = Keypair.fromSecretKey(bs58.decode(w.privateKey));
+    return { wallet: { ...w, launchId }, keypair };
+  }
+
+  const imported = readImportedFile();
   const iw = imported.find(w => w.id === walletId);
   if (iw) {
     if (iw.status !== 'active') throw new Error(`Wallet ${walletId} is ${iw.status}, cannot assign`);
     iw.launchId = launchId;
-    writeImported(imported);
+    writeImportedFile(imported);
     const keypair = Keypair.fromSecretKey(bs58.decode(iw.privateKey));
     return { wallet: iw, keypair };
   }
 
-  const wallets = readAll();
-  const w = wallets.find(w => w.id === walletId);
+  const wallets = readAllFile();
+  const w = wallets.find(x => x.id === walletId);
   if (!w) throw new Error(`Wallet ${walletId} not found`);
   if (w.status !== 'active') throw new Error(`Wallet ${walletId} is ${w.status}, cannot assign`);
   w.launchId = launchId;
-  writeAll(wallets);
+  writeAllFile(wallets);
   const keypair = Keypair.fromSecretKey(bs58.decode(w.privateKey));
   return { wallet: w, keypair };
 }
 
-export function listAvailable(): StoredWallet[] {
-  const launch = readAll().filter(w => w.status === 'active' && !w.launchId && w.type !== 'funding' && w.type !== 'mint');
-  const imported = readImported().filter(w => w.status === 'active' && !w.launchId);
+export async function listAvailable(sessionId?: string): Promise<StoredWallet[]> {
+  const sid = requireSession(sessionId);
+  if (usePostgres()) {
+    const launch = (await readAllPg(sid)).filter(w => w.status === 'active' && !w.launchId && w.type !== 'funding' && w.type !== 'mint');
+    const imported = (await readImportedPg(sid)).filter(w => w.status === 'active' && !w.launchId);
+    return [...imported, ...launch];
+  }
+  const launch = readAllFile().filter(w => w.status === 'active' && !w.launchId && w.type !== 'funding' && w.type !== 'mint');
+  const imported = readImportedFile().filter(w => w.status === 'active' && !w.launchId);
   return [...imported, ...launch];
 }
 
-export function getKeypair(walletId: string): Keypair {
-  const iw = readImported().find(w => w.id === walletId);
-  if (iw) return Keypair.fromSecretKey(bs58.decode(iw.privateKey));
-  const wallets = readAll();
-  const w = wallets.find(w => w.id === walletId);
+export async function getKeypair(walletId: string, sessionId?: string): Promise<Keypair> {
+  const sid = requireSession(sessionId);
+  let w: StoredWallet | null;
+  if (usePostgres()) {
+    w = await getWalletByIdPg(sid, walletId);
+  } else {
+    const iw = readImportedFile().find(x => x.id === walletId);
+    if (iw) {
+      return Keypair.fromSecretKey(bs58.decode(iw.privateKey));
+    }
+    w = readAllFile().find(x => x.id === walletId) ?? null;
+  }
   if (!w) throw new Error(`Wallet ${walletId} not found`);
   return Keypair.fromSecretKey(bs58.decode(w.privateKey));
 }
 
-export function getKeypairByPublicKey(pubkey: string): Keypair {
-  const iw = readImported().find(w => w.publicKey === pubkey);
+export async function getKeypairByPublicKey(pubkey: string, sessionId?: string): Promise<Keypair> {
+  const sid = requireSession(sessionId);
+  if (usePostgres()) {
+    const pool = getPool();
+    if (!pool) throw new Error('No pool');
+    const r = await pool.query(
+      `SELECT private_key FROM vault_wallets WHERE session_id = $1 AND public_key = $2`,
+      [sid, pubkey],
+    );
+    const row = r.rows[0];
+    if (!row) throw new Error(`Wallet with pubkey ${pubkey} not found`);
+    return Keypair.fromSecretKey(bs58.decode(row.private_key));
+  }
+  const iw = readImportedFile().find(w => w.publicKey === pubkey);
   if (iw) return Keypair.fromSecretKey(bs58.decode(iw.privateKey));
-  const wallets = readAll();
-  const w = wallets.find(w => w.publicKey === pubkey);
+  const wallets = readAllFile();
+  const w = wallets.find(x => x.publicKey === pubkey);
   if (!w) throw new Error(`Wallet with pubkey ${pubkey} not found`);
   return Keypair.fromSecretKey(bs58.decode(w.privateKey));
 }
 
-export function getPrivateKey(walletId: string): string {
-  const iw = readImported().find(w => w.id === walletId);
-  if (iw) return iw.privateKey;
-  const wallets = readAll();
-  const w = wallets.find(w => w.id === walletId);
+export async function getPrivateKey(walletId: string, sessionId?: string): Promise<string> {
+  const sid = requireSession(sessionId);
+  let w: StoredWallet | null;
+  if (usePostgres()) {
+    w = await getWalletByIdPg(sid, walletId);
+  } else {
+    const iw = readImportedFile().find(x => x.id === walletId);
+    if (iw) return iw.privateKey;
+    w = readAllFile().find(x => x.id === walletId) ?? null;
+  }
   if (!w) throw new Error(`Wallet ${walletId} not found`);
   return w.privateKey;
 }
 
-export function listWallets(filter?: { type?: string; status?: string }): StoredWallet[] {
-  let wallets = readAll();
+export async function listWallets(
+  filter?: { type?: string; status?: string },
+  sessionId?: string,
+): Promise<StoredWallet[]> {
+  const sid = requireSession(sessionId);
+  let wallets: StoredWallet[];
+  if (usePostgres()) {
+    wallets = await readAllPg(sid);
+    const imported = await readImportedPg(sid);
+    wallets = [...wallets, ...imported];
+  } else {
+    wallets = [...readAllFile(), ...readImportedFile()];
+  }
   if (filter?.type) wallets = wallets.filter(w => w.type === filter.type);
   if (filter?.status) wallets = wallets.filter(w => w.status === filter.status);
   return wallets;
 }
 
-export function archiveWallet(walletId: string): StoredWallet | null {
-  const wallets = readAll();
+export async function archiveWallet(walletId: string, sessionId?: string): Promise<StoredWallet | null> {
+  const sid = requireSession(sessionId);
+  if (usePostgres()) {
+    const w = await getWalletByIdPg(sid, walletId);
+    if (!w) return null;
+    await updateWalletPg(sid, walletId, { status: 'archived' });
+    return { ...w, status: 'archived' };
+  }
+
+  const wallets = readAllFile();
   const idx = wallets.findIndex(w => w.id === walletId);
   if (idx === -1) return null;
   wallets[idx].status = 'archived';
-  writeAll(wallets);
+  writeAllFile(wallets);
   return wallets[idx];
 }
 
-export function unarchiveWallet(walletId: string): StoredWallet | null {
-  const wallets = readAll();
+export async function unarchiveWallet(walletId: string, sessionId?: string): Promise<StoredWallet | null> {
+  const sid = requireSession(sessionId);
+  if (usePostgres()) {
+    const w = await getWalletByIdPg(sid, walletId);
+    if (!w) return null;
+    await updateWalletPg(sid, walletId, { status: 'active' });
+    return { ...w, status: 'active' };
+  }
+
+  const wallets = readAllFile();
   const idx = wallets.findIndex(w => w.id === walletId);
   if (idx === -1) return null;
   wallets[idx].status = 'active';
-  writeAll(wallets);
+  writeAllFile(wallets);
   return wallets[idx];
 }
 
-export function generateBatch(
+export async function generateBatch(
   count: number,
   type: StoredWallet['type'],
   labelPrefix: string,
   launchId?: string,
-): { wallet: StoredWallet; keypair: Keypair }[] {
-  const results = [];
+  sessionId?: string,
+): Promise<{ wallet: StoredWallet; keypair: Keypair }[]> {
+  const results: { wallet: StoredWallet; keypair: Keypair }[] = [];
   for (let i = 0; i < count; i++) {
-    results.push(generateAndStore(type, `${labelPrefix} ${i + 1}`, launchId));
+    results.push(await generateAndStore(type, `${labelPrefix} ${i + 1}`, launchId, sessionId));
   }
   return results;
 }

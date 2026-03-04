@@ -13,35 +13,35 @@ import {
 
 const router = Router();
 
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   const type = typeof req.query.type === 'string' ? req.query.type : undefined;
   const status = typeof req.query.status === 'string' ? req.query.status : 'active';
   const launchId = typeof req.query.launchId === 'string' ? req.query.launchId : undefined;
-  let wallets = vault.listWallets({ type, status });
+  let wallets = await vault.listWallets({ type, status }, req.sessionId);
   if (launchId) {
     wallets = wallets.filter(w => w.launchId === launchId);
   }
   res.json(wallets);
 });
 
-router.get('/available', (_req: Request, res: Response) => {
+router.get('/available', async (_req: Request, res: Response) => {
   try {
-    res.json(vault.listAvailable());
+    res.json(await vault.listAvailable(_req.sessionId));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.get('/imported', (_req: Request, res: Response) => {
+router.get('/imported', async (_req: Request, res: Response) => {
   try {
-    res.json(vault.listImported());
+    res.json(await vault.listImported(_req.sessionId));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/imported/:id', (req: Request, res: Response) => {
-  const deleted = vault.deleteImported(String(req.params.id));
+router.delete('/imported/:id', async (req: Request, res: Response) => {
+  const deleted = await vault.deleteImported(String(req.params.id), req.sessionId);
   if (!deleted) return res.status(404).json({ error: 'Not found' });
   res.json({ deleted: true });
 });
@@ -49,7 +49,7 @@ router.delete('/imported/:id', (req: Request, res: Response) => {
 router.get('/funding', fundingMiddleware, async (req: FundingRequest, res: Response) => {
   if (req.query.refresh === '1') solana.resetConnection();
   try {
-    const kp = solana.getFundingKeypair(req.fundingKeypair);
+    const kp = solana.getFundingKeypair(req.fundingKeypair!);
     const pubkey = kp.publicKey.toBase58();
     const conn = await solana.getConnectionForSession(req.sessionId);
     try {
@@ -63,18 +63,18 @@ router.get('/funding', fundingMiddleware, async (req: FundingRequest, res: Respo
   }
 });
 
-router.post('/generate', (req: Request, res: Response) => {
+router.post('/generate', async (req: Request, res: Response) => {
   const { count = 1, type = 'manual', label = 'Wallet' } = req.body;
   const clamped = Math.min(Math.max(Number(count), 1), 50);
-  const results = vault.generateBatch(clamped, type, label);
+  const results = await vault.generateBatch(clamped, type, label, undefined, req.sessionId);
   res.json(results.map(r => r.wallet));
 });
 
-router.post('/import', (req: Request, res: Response) => {
+router.post('/import', async (req: Request, res: Response) => {
   const { privateKey, type = 'manual', label = 'Imported' } = req.body;
   if (!privateKey) return res.status(400).json({ error: 'privateKey required' });
   try {
-    const wallet = vault.importKey(privateKey, type, label);
+    const wallet = await vault.importKey(privateKey, type, label, req.sessionId);
     res.json(wallet);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -83,7 +83,9 @@ router.post('/import', (req: Request, res: Response) => {
 
 router.post('/refresh-balances', async (req: Request, res: Response) => {
   const { ids } = req.body;
-  const wallets = ids ? [...vault.listWallets({}), ...vault.listImported()] : vault.listWallets({ status: 'active' });
+  const wallets = ids
+    ? [...(await vault.listWallets({}, req.sessionId)), ...(await vault.listImported(req.sessionId))]
+    : await vault.listWallets({ status: 'active' }, req.sessionId);
   const toRefresh = ids
     ? wallets.filter(w => (ids as string[]).includes(w.id))
     : wallets;
@@ -101,38 +103,38 @@ router.post('/refresh-balances', async (req: Request, res: Response) => {
   res.json(results);
 });
 
-router.get('/:id/private-key', (req: Request, res: Response) => {
+router.get('/:id/private-key', async (req: Request, res: Response) => {
   try {
-    const pk = vault.getPrivateKey(String(req.params.id));
+    const pk = await vault.getPrivateKey(String(req.params.id), req.sessionId);
     res.json({ privateKey: pk });
   } catch (err: any) {
     res.status(404).json({ error: err.message });
   }
 });
 
-router.patch('/:id/archive', (req: Request, res: Response) => {
-  const wallet = vault.archiveWallet(String(req.params.id));
+router.patch('/:id/archive', async (req: Request, res: Response) => {
+  const wallet = await vault.archiveWallet(String(req.params.id), req.sessionId);
   if (!wallet) return res.status(404).json({ error: 'Not found' });
   res.json(wallet);
 });
 
-router.post('/archive-all', (req: Request, res: Response) => {
+router.post('/archive-all', async (req: Request, res: Response) => {
   const { type } = req.body;
   const params: Record<string, string> = { status: 'active' };
   if (type && type !== 'all') params.type = type;
-  let wallets = vault.listWallets(params).filter(w => w.type !== 'funding');
+  let wallets = (await vault.listWallets(params, req.sessionId)).filter(w => w.type !== 'funding');
   if (!type || type === 'all') {
     wallets = wallets.filter(w => w.type !== 'manual');
   }
   let archived = 0;
   for (const w of wallets) {
-    if (vault.archiveWallet(w.id)) archived++;
+    if (await vault.archiveWallet(w.id, req.sessionId)) archived++;
   }
   res.json({ archived, total: wallets.length });
 });
 
-router.patch('/:id/unarchive', (req: Request, res: Response) => {
-  const wallet = vault.unarchiveWallet(String(req.params.id));
+router.patch('/:id/unarchive', async (req: Request, res: Response) => {
+  const wallet = await vault.unarchiveWallet(String(req.params.id), req.sessionId);
   if (!wallet) return res.status(404).json({ error: 'Not found' });
   res.json(wallet);
 });
@@ -145,7 +147,7 @@ router.post('/balances', async (req: Request, res: Response) => {
   const conn = solana.getConnection();
 
   // Include ALL wallets (even archived) — they may still hold tokens
-  let wallets = vault.listWallets({});
+  let wallets = await vault.listWallets({}, req.sessionId);
   if (launchId) {
     wallets = wallets.filter(w => w.launchId === String(launchId));
   }
@@ -216,10 +218,10 @@ router.post('/balances', async (req: Request, res: Response) => {
 });
 
 router.post('/gather', fundingMiddleware, async (req: FundingRequest, res: Response) => {
-  const fundingKp = solana.getFundingKeypair(req.fundingKeypair);
+  const fundingKp = solana.getFundingKeypair(req.fundingKeypair!);
   const fundingPk = fundingKp.publicKey.toBase58();
   const launchId = typeof req.body?.launchId === 'string' ? req.body.launchId : undefined;
-  let wallets = vault.listWallets({ status: 'active' });
+  let wallets = (await vault.listWallets({ status: 'active' }, req.sessionId)).filter(w => w.type !== 'funding');
   if (launchId) {
     wallets = wallets.filter(w => w.launchId === launchId);
   }
@@ -244,7 +246,7 @@ router.post('/gather', fundingMiddleware, async (req: FundingRequest, res: Respo
         continue;
       }
 
-      const kp = vault.getKeypair(w.id);
+      const kp = await vault.getKeypair(w.id, req.sessionId);
       const { blockhash } = await conn.getLatestBlockhash('confirmed');
 
       const msg = new TransactionMessage({
@@ -280,9 +282,9 @@ router.post('/gather', fundingMiddleware, async (req: FundingRequest, res: Respo
 });
 
 router.post('/close-token-accounts', fundingMiddleware, async (req: FundingRequest, res: Response) => {
-  const fundingKp = solana.getFundingKeypair(req.fundingKeypair);
+  const fundingKp = solana.getFundingKeypair(req.fundingKeypair!);
   const conn = await solana.getConnectionForSession(req.sessionId);
-  const archivedWallets = vault.listWallets({ status: 'archived' }).filter(w => w.type !== 'funding');
+  const archivedWallets = (await vault.listWallets({ status: 'archived' }, req.sessionId)).filter(w => w.type !== 'funding');
 
   const results: { publicKey: string; closed: number; recoveredSol: number; error?: string }[] = [];
   let totalRecovered = 0;
@@ -290,7 +292,7 @@ router.post('/close-token-accounts', fundingMiddleware, async (req: FundingReque
   for (const w of archivedWallets) {
     try {
       const ownerPk = new PublicKey(w.publicKey);
-      const kp = vault.getKeypair(w.id);
+      const kp = await vault.getKeypair(w.id, req.sessionId);
 
       // Find all token accounts owned by this wallet
       const tokenAccounts = await conn.getParsedTokenAccountsByOwner(ownerPk, {

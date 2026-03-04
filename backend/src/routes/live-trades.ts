@@ -4,16 +4,16 @@ import { tracker, FormattedTrade } from '../services/pumpportal';
 const router = Router();
 
 // Pre-subscribe to a mint (for vanity addresses or manual tracking before launch)
-router.post('/presubscribe', (req: Request, res: Response) => {
+router.post('/presubscribe', async (req: Request, res: Response) => {
   const { mint } = req.body;
   if (!mint || typeof mint !== 'string' || mint.length < 32) {
     return res.status(400).json({ error: 'valid mint address required' });
   }
-  tracker.subscribe(mint);
+  await tracker.subscribe(mint, undefined, req.sessionId);
   res.json({ status: 'subscribed', mint });
 });
 
-router.get('/', (req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   const mint = String(req.query.mint || '');
   if (!mint) return res.status(400).json({ error: 'mint query param required' });
 
@@ -24,7 +24,7 @@ router.get('/', (req: Request, res: Response) => {
     'Access-Control-Allow-Origin': '*',
   });
 
-  tracker.subscribe(mint);
+  await tracker.subscribe(mint, undefined, req.sessionId);
 
   // Small delay to let any cached trades arrive
   setTimeout(() => {

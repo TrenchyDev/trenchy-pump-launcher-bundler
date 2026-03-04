@@ -116,9 +116,9 @@ router.post('/execute', async (req: Request, res: Response) => {
   };
 
   try {
-    const keypair = vault.getKeypair(walletId);
+    const sessionId = req.sessionId;
+    const keypair = await vault.getKeypair(walletId, sessionId);
     const mintPubkey = new PublicKey(mint);
-    const sessionId = (req.headers['x-session-id'] as string)?.trim();
     const conn = await solana.getConnectionForSession(sessionId);
     const { blockhash } = await conn.getLatestBlockhash('confirmed');
 
@@ -152,7 +152,8 @@ router.post('/execute', async (req: Request, res: Response) => {
     trades.push(trade);
     writeTrades(trades);
 
-    const walletInfo = vault.listWallets({}).find(w => w.id === walletId);
+    const allWallets = await vault.listWallets({}, sessionId);
+    const walletInfo = allWallets.find(w => w.id === walletId);
     tracker.injectTrade(buildLiveTrade({
       signature: sig,
       mint,
@@ -184,34 +185,34 @@ router.post('/rapid-sell', async (req: Request, res: Response) => {
 
   const pct = Math.max(1, Math.min(100, Number(percentage) || 100));
 
+  const sessionId = req.sessionId;
   let allWallets: vault.StoredWallet[];
   if (walletIds && Array.isArray(walletIds) && walletIds.length > 0) {
-    const all = vault.listWallets({ status: 'active' });
+    const all = await vault.listWallets({ status: 'active' }, sessionId);
     allWallets = all.filter(w => walletIds.includes(w.id));
   } else if (walletTypes && Array.isArray(walletTypes) && walletTypes.length > 0) {
     allWallets = [];
     for (const t of walletTypes) {
-      allWallets.push(...vault.listWallets({ type: t, status: 'active' }));
+      allWallets.push(...(await vault.listWallets({ type: t, status: 'active' }, sessionId)));
     }
     if (launchId) {
       allWallets = allWallets.filter(w => w.launchId === String(launchId));
     }
   } else {
-    const wallets = vault.listWallets({ type: 'bundle', status: 'active' });
-    const devWallets = vault.listWallets({ type: 'dev', status: 'active' });
-    const sniperWallets = vault.listWallets({ type: 'sniper', status: 'active' });
+    const wallets = await vault.listWallets({ type: 'bundle', status: 'active' }, sessionId);
+    const devWallets = await vault.listWallets({ type: 'dev', status: 'active' }, sessionId);
+    const sniperWallets = await vault.listWallets({ type: 'sniper', status: 'active' }, sessionId);
     allWallets = [...devWallets, ...wallets, ...sniperWallets];
     if (launchId) {
       allWallets = allWallets.filter(w => w.launchId === String(launchId));
     }
   }
   const mintPubkey = new PublicKey(mint);
-  const sessionId = (req.headers['x-session-id'] as string)?.trim();
   const conn = await solana.getConnectionForSession(sessionId);
 
   const processWallet = async (w: vault.StoredWallet) => {
     try {
-      const keypair = vault.getKeypair(w.id);
+      const keypair = await vault.getKeypair(w.id, sessionId);
       const ata2022 = getAssociatedTokenAddressSync(
         mintPubkey,
         keypair.publicKey,
@@ -312,14 +313,14 @@ router.get('/creator-fees-available', async (req: Request, res: Response) => {
   const launchId = req.query.launchId as string;
   if (!launchId) return res.status(400).json({ error: 'launchId required' });
 
-  const devWallets = vault.listWallets({ type: 'dev' }).filter(w => w.launchId === String(launchId));
+  const sessionId = req.sessionId;
+  const devWallets = (await vault.listWallets({ type: 'dev' }, sessionId)).filter(w => w.launchId === String(launchId));
   if (devWallets.length === 0) {
     return res.status(404).json({ error: `No dev wallet found for launchId ${launchId}` });
   }
 
   const devWallet = devWallets.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
-  const keypair = vault.getKeypair(devWallet.id);
-  const sessionId = (req.headers['x-session-id'] as string)?.trim();
+  const keypair = await vault.getKeypair(devWallet.id, sessionId);
   const conn = await solana.getConnectionForSession(sessionId);
   const sdk = new OnlinePumpSdk(conn);
 
@@ -346,14 +347,14 @@ router.post('/collect-creator-fees', fundingMiddleware, async (req: FundingReque
   try {
     tracker.unsubscribeCurrentMint();
 
-    const devWallets = vault.listWallets({ type: 'dev' }).filter(w => w.launchId === String(launchId));
+    const sessionId = req.sessionId;
+    const devWallets = (await vault.listWallets({ type: 'dev' }, sessionId)).filter(w => w.launchId === String(launchId));
     if (devWallets.length === 0) {
       return res.status(404).json({ error: `No dev wallet found for launchId ${launchId}` });
     }
 
     const devWallet = devWallets.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
-    const keypair = vault.getKeypair(devWallet.id);
-    const sessionId = (req.headers['x-session-id'] as string)?.trim();
+    const keypair = await vault.getKeypair(devWallet.id, sessionId);
     const conn = await solana.getConnectionForSession(sessionId);
     const sdk = new OnlinePumpSdk(conn);
     const fundingKp = solana.getFundingKeypair(req.fundingKeypair);
@@ -493,7 +494,7 @@ function readLaunches(): LaunchRecord[] {
 
 router.get('/all-unclaimed-fees', async (req: Request, res: Response) => {
   const launches = readLaunches().filter(l => l.status === 'confirmed' && l.mintAddress);
-  const sessionId = (req.headers['x-session-id'] as string)?.trim();
+  const sessionId = req.sessionId;
   const conn = await solana.getConnectionForSession(sessionId);
   const sdk = new OnlinePumpSdk(conn);
 
@@ -506,14 +507,13 @@ router.get('/all-unclaimed-fees', async (req: Request, res: Response) => {
     availableSol: number;
     createdAt: string;
   }[] = [];
-
   for (const launch of launches) {
-    const devWallets = vault.listWallets({ type: 'dev' }).filter(w => w.launchId === launch.id);
+    const devWallets = (await vault.listWallets({ type: 'dev' }, sessionId)).filter(w => w.launchId === launch.id);
     if (devWallets.length === 0) continue;
 
     const devWallet = devWallets.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
     try {
-      const keypair = vault.getKeypair(devWallet.id);
+      const keypair = await vault.getKeypair(devWallet.id, sessionId);
       const balance = await suppressSdkWarns(() => sdk.getCreatorVaultBalanceBothPrograms(keypair.publicKey));
       const availableSol = Number(balance.toString()) / LAMPORTS_PER_SOL;
       results.push({
@@ -543,10 +543,10 @@ router.post('/collect-all-fees', fundingMiddleware, async (req: FundingRequest, 
     return res.status(400).json({ error: 'launchIds array required' });
   }
 
-  const sessionId = (req.headers['x-session-id'] as string)?.trim();
+  const sessionId = req.sessionId;
   const conn = await solana.getConnectionForSession(sessionId);
   const sdk = new OnlinePumpSdk(conn);
-  const fundingKp = solana.getFundingKeypair(req.fundingKeypair);
+  const fundingKp = solana.getFundingKeypair(req.fundingKeypair!);
 
   const results: {
     launchId: string;
@@ -559,7 +559,7 @@ router.post('/collect-all-fees', fundingMiddleware, async (req: FundingRequest, 
   }[] = [];
 
   for (const launchId of launchIds) {
-    const devWallets = vault.listWallets({ type: 'dev' }).filter(w => w.launchId === String(launchId));
+    const devWallets = (await vault.listWallets({ type: 'dev' }, sessionId)).filter(w => w.launchId === String(launchId));
     if (devWallets.length === 0) {
       results.push({ launchId, status: 'skipped', error: 'No dev wallet found' });
       continue;
@@ -567,7 +567,7 @@ router.post('/collect-all-fees', fundingMiddleware, async (req: FundingRequest, 
 
     const devWallet = devWallets.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
     try {
-      const keypair = vault.getKeypair(devWallet.id);
+      const keypair = await vault.getKeypair(devWallet.id, sessionId);
 
       // 1) Collect creator fees → goes to the dev wallet
       const vaultBal = await suppressSdkWarns(() => sdk.getCreatorVaultBalanceBothPrograms(keypair.publicKey));

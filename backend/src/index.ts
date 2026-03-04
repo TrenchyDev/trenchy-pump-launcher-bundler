@@ -38,6 +38,8 @@ import liveTradesRoutes from './routes/live-trades';
 import vanityRoutes from './routes/vanity';
 import envRoutes from './routes/env';
 import aiRoutes from './routes/ai';
+import { sessionMiddleware } from './middleware/session';
+import { initVaultStore } from './services/vault';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
@@ -46,6 +48,7 @@ const PORT_RETRY_DELAY_MS = 1000;
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+app.use(sessionMiddleware);
 
 const uploadsDir = fspath.join(__dirname, '../data/uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -121,6 +124,9 @@ function tryListen(attempt: number): void {
   });
   await initSessionOverrides().catch(err => {
     console.error('[Backend] SessionOverrides init failed:', err);
+  });
+  await initVaultStore().catch(err => {
+    console.error('[Backend] Vault init failed:', err);
   });
   tryListen(0);
 })();
