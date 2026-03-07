@@ -58,6 +58,7 @@ export default function Wallets() {
   const [collectFeesResult, setCollectFeesResult] = useState<{ totalCollected: number; totalSwept: number; count: number; errors: number } | null>(null)
   const [closingATAs, setClosingATAs] = useState(false)
   const [closeATAsResult, setCloseATAsResult] = useState<{ totalClosed: number; totalRecoveredSol: number; walletsWithATAs: number; errors: number } | null>(null)
+  const [deletingArchived, setDeletingArchived] = useState(false)
 
   const fetchWallets = useCallback(async () => {
     const params: Record<string, string> = { status: 'active' }
@@ -132,6 +133,20 @@ export default function Wallets() {
     await axios.patch(`/api/wallets/${id}/unarchive`)
     fetchArchivedWallets()
     fetchWallets()
+  }
+
+  const handleDeleteAllArchived = async () => {
+    const msg = `This is a DESTRUCTIVE change. It will PERMANENTLY delete ALL ${archivedWallets.length} archived wallet(s). Their keys cannot be recovered. This speeds up the app by not checking archived wallets. Continue?`
+    if (!confirm(msg)) return
+    setDeletingArchived(true)
+    try {
+      await axios.delete('/api/wallets/archive-all')
+      setArchivedWallets([])
+      fetchWallets()
+      setCloseATAsResult(null)
+    } finally {
+      setDeletingArchived(false)
+    }
   }
 
   const copyToClipboard = (text: string, id: string) => {
@@ -568,7 +583,7 @@ export default function Wallets() {
               </span>
             </h3>
             {archivedWallets.length > 0 && (
-              <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                 <button style={{
                   fontSize: 11, padding: '6px 14px', borderRadius: 8, fontWeight: 600, cursor: 'pointer',
                   border: '1px solid rgba(168,85,247,0.3)', background: 'rgba(168,85,247,0.08)', color: '#c084fc',
@@ -578,6 +593,15 @@ export default function Wallets() {
                   {closingATAs ? 'Closing ATAs...' : 'Close All Token Accounts → Funding'}
                 </button>
                 <Tip text="Closes leftover token accounts in archived wallets and recovers the ~0.002 SOL rent per account back to the funding wallet." />
+                <button style={{
+                  fontSize: 11, padding: '6px 14px', borderRadius: 8, fontWeight: 600, cursor: 'pointer',
+                  border: '1px solid rgba(239,68,68,0.4)', background: 'rgba(239,68,68,0.1)', color: '#f87171',
+                }}
+                  disabled={deletingArchived}
+                  onClick={handleDeleteAllArchived}>
+                  {deletingArchived ? 'Deleting...' : 'Delete All Archived'}
+                </button>
+                <Tip text="DESTRUCTIVE: Permanently deletes ALL archived wallets. Keys cannot be recovered. Use this to clear the archive and avoid checking many wallets." />
               </span>
             )}
           </div>

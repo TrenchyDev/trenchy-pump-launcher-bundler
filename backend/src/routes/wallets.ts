@@ -139,6 +139,32 @@ router.patch('/:id/unarchive', async (req: Request, res: Response) => {
   res.json(wallet);
 });
 
+/** Permanently delete ALL archived wallets. Destructive — cannot be undone. */
+router.delete('/archive-all', async (req: Request, res: Response) => {
+  const { deleted } = await vault.deleteAllArchived(req.sessionId);
+  res.json({ deleted });
+});
+
+/** Fund a wallet from the funding wallet (e.g. after gather left it with tokens but no SOL) */
+router.post('/:id/fund', fundingMiddleware, async (req: FundingRequest, res: Response) => {
+  const id = String(req.params.id);
+  const amount = Math.max(0.001, Math.min(1, Number(req.body?.amount) || 0.01));
+  try {
+    const fundingKp = solana.getFundingKeypair(req.fundingKeypair!);
+    const kp = await vault.getKeypair(id, req.sessionId);
+    const conn = await solana.getConnectionForSession(req.sessionId);
+    const sig = await solana.transferSol(fundingKp, kp.publicKey, amount, { conn });
+    console.log(`[Fund] ${kp.publicKey.toBase58().slice(0, 8)}... +${amount} SOL`);
+    res.json({ signature: sig, amount, publicKey: kp.publicKey.toBase58() });
+  } catch (err: any) {
+    if (err.message?.includes('not found') || err.message?.includes('No wallet')) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+    console.error('[Fund] Error:', err.message);
+    res.status(500).json({ error: err.message || 'Failed to fund wallet' });
+  }
+});
+
 router.post('/balances', async (req: Request, res: Response) => {
   const { mint, launchId } = req.body;
   if (!mint) return res.status(400).json({ error: 'mint required' });

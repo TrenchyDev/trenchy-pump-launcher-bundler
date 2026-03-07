@@ -596,6 +596,34 @@ export async function unarchiveWallet(walletId: string, sessionId?: string): Pro
   return wallets[idx];
 }
 
+/** Permanently delete ALL archived wallets. Destructive — keys cannot be recovered. */
+export async function deleteAllArchived(sessionId?: string): Promise<{ deleted: number }> {
+  const sid = requireSession(sessionId);
+
+  if (usePostgres()) {
+    const pool = getPool();
+    if (!pool) return { deleted: 0 };
+    const r = await pool.query(
+      `DELETE FROM vault_wallets WHERE session_id = $1 AND status = 'archived'`,
+      [sid],
+    );
+    return { deleted: r.rowCount ?? 0 };
+  }
+
+  let deleted = 0;
+  const generated = readAllFile();
+  const activeGenerated = generated.filter(w => w.status !== 'archived');
+  deleted += generated.length - activeGenerated.length;
+  writeAllFile(activeGenerated);
+
+  const imported = readImportedFile();
+  const activeImported = imported.filter(w => w.status !== 'archived');
+  deleted += imported.length - activeImported.length;
+  writeImportedFile(activeImported);
+
+  return { deleted };
+}
+
 export async function generateBatch(
   count: number,
   type: StoredWallet['type'],
