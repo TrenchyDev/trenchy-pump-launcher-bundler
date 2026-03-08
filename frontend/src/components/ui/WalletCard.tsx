@@ -2,15 +2,19 @@ import { useState } from 'react'
 import type { WalletBalance } from '../../types'
 import { BADGE_COLORS, fmtSol, fmtTokens, fmtPct } from '../../types'
 
+const MIN_SOL_FOR_SELL = 0.005
+
 interface Props {
   wallet: WalletBalance
   isSelling: boolean
+  isFunding: boolean
   buyingKey: string | null
   onSell: (walletId: string, pct: number) => void
   onBuy: (walletId: string, solAmount: number) => void
+  onFund?: (walletId: string) => void
 }
 
-export default function WalletCard({ wallet: w, isSelling, buyingKey, onSell, onBuy }: Props) {
+export default function WalletCard({ wallet: w, isSelling, isFunding, buyingKey, onSell, onBuy, onFund }: Props) {
   const [buyInput, setBuyInput] = useState('')
   const hasTokens = w.tokenBalance > 0
   const badgeColor = BADGE_COLORS[w.type] || '#94a3b8'
@@ -109,6 +113,26 @@ export default function WalletCard({ wallet: w, isSelling, buyingKey, onSell, on
                 background: 'rgba(16,185,129,0.15)', color: '#34d399',
               }}>Buy</button>
           </div>
+        </div>
+      )}
+
+      {/* Fund button — when wallet has tokens but no SOL (e.g. after gather) */}
+      {hasTokens && w.solBalance < MIN_SOL_FOR_SELL && onFund && (
+        <div style={{ marginBottom: 8 }}>
+          <button
+            disabled={isFunding}
+            onClick={() => onFund(w.id)}
+            style={{
+              width: '100%', padding: '6px 0', fontSize: 10, fontWeight: 700, borderRadius: 4,
+              border: '1px solid rgba(96,165,250,0.4)',
+              cursor: isFunding ? 'wait' : 'pointer',
+              background: 'rgba(96,165,250,0.15)', color: '#60a5fa',
+              transition: 'background 0.15s',
+            }}
+            onMouseEnter={e => { if (!isFunding) e.currentTarget.style.background = 'rgba(96,165,250,0.25)' }}
+            onMouseLeave={e => (e.currentTarget.style.background = 'rgba(96,165,250,0.15)')}>
+            {isFunding ? 'Funding...' : 'Fund 0.01 SOL'}
+          </button>
         </div>
       )}
 

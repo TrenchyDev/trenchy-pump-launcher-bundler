@@ -22,6 +22,7 @@ interface LaunchForm {
   useJito: boolean
   useLUT: boolean
   strictBundle: boolean
+  autoSellAfterLaunch: boolean
   mintAddressMode: 'random' | 'vanity'
   vanityMintPublicKey: string
   devWalletId: string
@@ -49,6 +50,14 @@ interface VanityAddress {
   suffix: string
   status: 'available' | 'used'
   createdAt: string
+}
+
+interface LaunchProfileSummary {
+  id: string
+  name: string
+  createdAt: string
+  tokenName: string
+  tokenSymbol: string
 }
 
 const fmtNum = (n: number) => {
@@ -81,6 +90,7 @@ export default function Launch() {
     useJito: true,
     useLUT: false,
     strictBundle: true,
+    autoSellAfterLaunch: false,
     mintAddressMode: (localStorage.getItem('mintAddressMode') as 'random' | 'vanity') || 'random',
     vanityMintPublicKey: '',
     devWalletId: '',
@@ -106,6 +116,16 @@ export default function Launch() {
   const [availableWallets, setAvailableWallets] = useState<AvailableWallet[]>([])
   const [copiedMint, setCopiedMint] = useState(false)
   const [randomPreview, setRandomPreview] = useState<string | null>(null)
+  const [profiles, setProfiles] = useState<LaunchProfileSummary[]>([])
+  const [savingProfile, setSavingProfile] = useState(false)
+
+  const fetchProfiles = useCallback(() => {
+    axios.get<LaunchProfileSummary[]>('/api/launch-profiles').then(r => setProfiles(r.data)).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    fetchProfiles()
+  }, [fetchProfiles])
 
   useEffect(() => {
     const fetchBal = () => { axios.get('/api/wallets/funding').then(r => setFundingBalance(r.data.balance)).catch(() => {}) }
@@ -252,6 +272,50 @@ export default function Launch() {
     })
   }
 
+  const loadProfile = async (profileId: string) => {
+    if (!profileId) return
+    try {
+      const res = await axios.get<{ form: LaunchForm }>(`/api/launch-profiles/${profileId}`)
+      const f = res.data.form
+      const bc = Math.max(0, Math.min(4, f.bundleWalletCount ?? 0))
+      const hc = Math.max(0, f.holderWalletCount ?? 0)
+      const bundleIds = [...(f.bundleWalletIds || [])]
+      while (bundleIds.length < 4) bundleIds.push(null)
+      const holderIds = [...(f.holderWalletIds || [])]
+      while (holderIds.length < hc) holderIds.push(null)
+      const bundleAmounts = [...(f.bundleSwapAmounts || [])]
+      while (bundleAmounts.length < bc) bundleAmounts.push(0.5)
+      const holderAmounts = [...(f.holderSwapAmounts || [])]
+      while (holderAmounts.length < hc) holderAmounts.push(0.5)
+      setForm({
+        ...f,
+        bundleWalletCount: bc,
+        holderWalletCount: hc,
+        bundleWalletIds: bundleIds.slice(0, 4),
+        holderWalletIds: holderIds.slice(0, hc),
+        bundleSwapAmounts: bundleAmounts.slice(0, bc),
+        holderSwapAmounts: holderAmounts.slice(0, hc),
+      })
+      setImagePreview(f.imageUrl || null)
+      if (f.mintAddressMode === 'vanity') {
+        fetchVanityPool()
+      } else {
+        axios.get('/api/vanity/preview-random').then(r => setRandomPreview(r.data.publicKey)).catch(() => {})
+      }
+    } catch (err) { console.error(err) }
+  }
+
+  const saveProfile = async () => {
+    const name = window.prompt('Profile name', form.tokenName ? `${form.tokenName} (${form.tokenSymbol})` : 'My Launch Profile')
+    if (!name?.trim()) return
+    setSavingProfile(true)
+    try {
+      await axios.post('/api/launch-profiles', { name: name.trim(), form })
+      fetchProfiles()
+    } catch (err) { console.error(err) }
+    finally { setSavingProfile(false) }
+  }
+
   const setBundleCount = (count: number) => {
     const amounts = Array(count).fill(0.5)
     for (let i = 0; i < Math.min(count, form.bundleSwapAmounts.length); i++)
@@ -350,7 +414,7 @@ export default function Launch() {
       }
       const res = await axios.post('/api/launch', payload)
       const { launchId } = res.data
-      navigate('/trading', { state: { launchId, holderAutoBuy: form.holderAutoBuy } })
+      navigate('/trading', { state: { launchId, holderAutoBuy: form.holderAutoBuy, autoSellAfterLaunch: form.autoSellAfterLaunch } })
     } catch (err: unknown) {
       const msg = err && typeof err === 'object' && 'response' in err
         ? (err as { response?: { data?: { error?: string }; status?: number }; message?: string }).response?.data?.error
@@ -363,15 +427,43 @@ export default function Launch() {
 
   return (
     <div className="fade-up">
-      <div style={{ marginBottom: 24, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+      <div style={{ marginBottom: 24, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 className="page-title">Launch Token</h1>
           <p className="page-subtitle">Create and deploy a new token on Pump.fun with bundled buys</p>
         </div>
-        <button className="btn-ghost" style={{ fontSize: 11, border: '1px solid #253346', borderRadius: 6, padding: '6px 12px' }}
-          onClick={fillTestLaunch}>
-          Fill Test Launch
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 9, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>Profiles</span>
+            <select
+              className="input"
+              style={{ padding: '4px 8px', fontSize: 10, minWidth: 140, background: 'rgba(15,23,42,0.6)', border: '1px solid rgba(37,51,70,0.5)' }}
+              value=""
+              onChange={e => { const v = e.target.value; if (v) loadProfile(v); e.target.value = '' }}
+              title="Load a saved profile"
+            >
+              <option value="">Load profile...</option>
+              {profiles.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.name} {p.tokenSymbol ? `(${p.tokenSymbol})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            className="btn-ghost"
+            style={{ fontSize: 11, border: '1px solid rgba(96,165,250,0.4)', borderRadius: 6, padding: '6px 12px', color: '#60a5fa' }}
+            onClick={saveProfile}
+            disabled={savingProfile}
+            title="Save current form as a reusable profile"
+          >
+            {savingProfile ? 'Saving...' : 'Save as profile'}
+          </button>
+          <button className="btn-ghost" style={{ fontSize: 11, border: '1px solid #253346', borderRadius: 6, padding: '6px 12px' }}
+            onClick={fillTestLaunch}>
+            Fill Test Launch
+          </button>
+        </div>
       </div>
 
       {/* Vanity Mint — sleek top bar */}
@@ -724,6 +816,22 @@ export default function Launch() {
                 </div>
               </div>
             )}
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer', marginTop: 16 }}
+              onClick={() => updateForm({ autoSellAfterLaunch: !form.autoSellAfterLaunch })}>
+              <div className={`toggle-track${form.autoSellAfterLaunch ? ' on' : ''}`} style={form.autoSellAfterLaunch ? { background: '#ef4444' } : undefined}>
+                <div className="toggle-knob" />
+              </div>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 500, color: form.autoSellAfterLaunch ? '#ef4444' : '#fff', display: 'flex', alignItems: 'center' }}>
+                  Sell All at Launch
+                  <Tip text="Instantly sells 100% of tokens from ALL wallets (Dev + Bundle) the moment the launch is confirmed on-chain. Happens server-side — zero delay, no button press needed. The sell fires within milliseconds of confirmation." />
+                </div>
+                <div style={{ fontSize: 12, color: '#64748b' }}>
+                  SELL ALL — dump Dev + Bundle tokens instantly after launch confirms
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Launch Button */}

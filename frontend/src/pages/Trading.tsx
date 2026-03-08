@@ -108,7 +108,7 @@ function SmartActionButton({ closingOut, activeMint, showCloseoutButton, totalTo
 
 export default function Trading() {
   const location = useLocation()
-  const incomingLaunch = (location.state as { launchId?: string; holderAutoBuy?: boolean } | null)
+  const incomingLaunch = (location.state as { launchId?: string; holderAutoBuy?: boolean; autoSellAfterLaunch?: boolean } | null)
 
   const [launches, setLaunches] = useState<Launch[]>([])
   const [allLaunches, setAllLaunches] = useState<AllLaunch[]>([])
@@ -117,6 +117,7 @@ export default function Trading() {
   const [walletBalances, setWalletBalances] = useState<WalletBalance[]>([])
   const [loadingBalances, setLoadingBalances] = useState(false)
   const [sellingWalletId, setSellingWalletId] = useState<string | null>(null)
+  const [fundingWalletId, setFundingWalletId] = useState<string | null>(null)
   const [buyingKey, setBuyingKey] = useState<string | null>(null)
   // buyInputs moved into WalletCard component
   const [rapidSelling, setRapidSelling] = useState(false)
@@ -159,6 +160,8 @@ export default function Trading() {
     const es = new EventSource(`/api/launch/${lid}/stream`)
     launchEsRef.current = es
 
+    const keepOpen = !!(incomingLaunch?.holderAutoBuy || incomingLaunch?.autoSellAfterLaunch)
+
     es.onmessage = (event) => {
       const data = JSON.parse(event.data)
       if (data.stage === 'done') {
@@ -170,17 +173,25 @@ export default function Trading() {
           setMintInput('')
         }
         refreshAfterLaunchRef.current()
-        if (!incomingLaunch?.holderAutoBuy) {
+        if (!keepOpen) {
           es.close()
           launchEsRef.current = null
         }
         return
       }
-      if (data.stage === 'holder-done') {
-        launchInProgressRef.current = false
+      if (data.stage === 'auto-sell-done' || data.stage === 'holder-done') {
         setLaunchStages(prev => prev.map(s => s.status === 'active' ? { ...s, status: 'done' } : s))
-        es.close()
-        launchEsRef.current = null
+        if (data.stage === 'auto-sell-done') {
+          refreshAfterLaunchRef.current()
+          fetchBalances()
+        }
+        if (data.stage === 'holder-done' && !incomingLaunch?.autoSellAfterLaunch) {
+          es.close()
+          launchEsRef.current = null
+        } else if (data.stage === 'auto-sell-done' && !incomingLaunch?.holderAutoBuy) {
+          es.close()
+          launchEsRef.current = null
+        }
         return
       }
       if (data.stage === 'error') {
@@ -329,6 +340,16 @@ export default function Trading() {
     es.onerror = () => setLiveError('Live trades connection lost — reconnecting...')
     return () => { es.close() }
   }, [selectedMint, mintInput])
+
+  // Per-wallet fund (from funding wallet — e.g. after gather left tokens but no SOL)
+  const handleWalletFund = async (walletId: string) => {
+    setFundingWalletId(walletId)
+    try {
+      await axios.post(`/api/wallets/${walletId}/fund`, { amount: 0.01 })
+      await fetchBalances()
+    } catch (err: any) { console.error(err) }
+    finally { setFundingWalletId(null) }
+  }
 
   // Per-wallet sell
   const handleWalletSell = async (walletId: string, pct: number) => {
@@ -871,9 +892,11 @@ export default function Trading() {
             key={w.id}
             wallet={w}
             isSelling={sellingWalletId === w.id}
+            isFunding={fundingWalletId === w.id}
             buyingKey={buyingKey}
             onSell={handleWalletSell}
             onBuy={handleWalletBuy}
+            onFund={handleWalletFund}
           />
         ))}
       </div>
