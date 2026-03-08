@@ -217,7 +217,10 @@ export async function uploadMetadataToIpfs(params: {
 
   const localPath = getLocalImagePath(params.imageUrl);
   if (localPath) {
-    form.append('file', fs.createReadStream(localPath));
+    // pump.fun returns 500 when file is sent as stream — must use Buffer with filename
+    const buf = fs.readFileSync(localPath);
+    const ext = path.extname(localPath).toLowerCase() || '.png';
+    form.append('file', buf, { filename: `token${ext}`, contentType: ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'image/png' });
   } else if (params.imageUrl && params.imageUrl.startsWith('http')) {
     try {
       const imgResp = await axios.get(params.imageUrl, { responseType: 'arraybuffer', timeout: 15000 });
@@ -253,12 +256,28 @@ export async function uploadMetadataToIpfs(params: {
   if (twitter) form.append('twitter', twitter);
   if (telegram) form.append('telegram', telegram);
 
-  const resp = await axios.post('https://pump.fun/api/ipfs', form, {
-    headers: form.getHeaders(),
-    timeout: 30000,
-  });
+  let resp: { data?: { metadataUri?: string } } | null = null;
+  const maxRetries = 2;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      resp = await axios.post('https://pump.fun/api/ipfs', form, {
+        headers: form.getHeaders(),
+        timeout: 30000,
+      });
+      break;
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (attempt < maxRetries && status === 500) {
+        console.warn(`[Launch] pump.fun IPFS 500, retry ${attempt}/${maxRetries}...`);
+        await new Promise(r => setTimeout(r, 2000 * attempt));
+        continue;
+      }
+      throw new Error(`pump.fun IPFS upload failed (${status ?? 'network'}): ${msg}`);
+    }
+  }
 
-  const metadataUri = resp.data?.metadataUri;
+  const metadataUri = resp?.data?.metadataUri;
   if (!metadataUri) throw new Error('pump.fun IPFS upload failed — no metadataUri returned');
   console.log('[Launch] Metadata uploaded to IPFS:', metadataUri);
   return metadataUri;
