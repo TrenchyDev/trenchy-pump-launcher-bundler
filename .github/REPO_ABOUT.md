@@ -1,5 +1,7 @@
 # GitHub repo "About" (copy into repository Settings → General → Description)
 
+**Repo name:** `pumpfun-jito-bundler` (unique name with pumpfun + bundler)
+
 **Short description (≤ 350 chars):**
 
 ```
