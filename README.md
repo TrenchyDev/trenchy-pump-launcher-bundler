@@ -1,8 +1,12 @@
-# Trencher Bundler V2
+# Pumpfun Solana Bundler Frontend Dashboard (FIXED JITO)
+
+> **All credit goes to [TrenchyDev](https://github.com/TrenchyDev) for the original project.** I fixed the Jito bundling delay so launches are instant — no more 60s cooldown between bundles. Also added retry logic for IPFS uploads and auto-funding for sells.
+
+---
 
 https://github.com/user-attachments/assets/c05d9e75-c6e4-484d-85cf-d374f3c3d022
 
-**Next-gen pump.fun token launcher on Solana.** Jito bundles, Token-2022, AI metadata & images, live trades, rapid sell. [trenchytools.lol](https://trenchytools.lol)
+**Next-gen pump.fun token launcher on Solana.** Jito bundles, Token-2022, AI metadata & images, live trades, rapid sell.
 
 The next-generation Solana token launcher for pump.fun. Built from the ground up on the official `@pump-fun/pump-sdk` with Jito bundle support, real-time trade tracking, AI token generation, and a wallet vault.
 
